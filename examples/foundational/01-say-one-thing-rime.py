@@ -23,8 +23,9 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 load_dotenv(override=True)
 
-# We use lambdas to defer transport parameter creation until the transport
-# type is selected at runtime.
+# We store functions so objects (e.g. SileroVADAnalyzer) don't get
+# instantiated. The function will be called when the desired transport gets
+# selected.
 transport_params = {
     "daily": lambda: DailyParams(audio_out_enabled=True),
     "twilio": lambda: FastAPIWebsocketParams(audio_out_enabled=True),

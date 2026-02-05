@@ -134,7 +134,3 @@ class TestLLMFullResponseAggregator(unittest.IsolatedAsyncioTestCase):
             expected_down_frames=expected_down_frames,
         )
         assert completion_ok
-
-
-if __name__ == "__main__":
-    unittest.main()

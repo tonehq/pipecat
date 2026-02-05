@@ -26,7 +26,6 @@ from pipecat.runner.utils import create_transport
 from pipecat.services.gradium.stt import GradiumSTTService
 from pipecat.services.gradium.tts import GradiumTTSService
 from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
@@ -35,20 +34,24 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 load_dotenv(override=True)
 
-# We use lambdas to defer transport parameter creation until the transport
-# type is selected at runtime.
+# We store functions so objects (e.g. SileroVADAnalyzer) don't get
+# instantiated. The function will be called when the desired transport gets
+# selected.
 transport_params = {
     "daily": lambda: DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
     "twilio": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
     "webrtc": lambda: TransportParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
 }
 
@@ -56,18 +59,11 @@ transport_params = {
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     logger.info(f"Starting bot")
 
-    stt = GradiumSTTService(
-        api_key=os.getenv("GRADIUM_API_KEY"),
-        api_endpoint_base_url="wss://us.api.gradium.ai/api/speech/asr",
-        params=GradiumSTTService.InputParams(
-            language=Language.EN,
-        ),
-    )
+    stt = GradiumSTTService(api_key=os.getenv("GRADIUM_API_KEY"))
 
     tts = GradiumTTSService(
         api_key=os.getenv("GRADIUM_API_KEY"),
         voice_id="YTpq7expH9539ERJ",
-        url="wss://us.api.gradium.ai/api/speech/tts",
     )
 
     llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
@@ -86,7 +82,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             user_turn_strategies=UserTurnStrategies(
                 stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())]
             ),
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
         ),
     )
 

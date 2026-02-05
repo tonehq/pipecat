@@ -143,7 +143,3 @@ class TestRNNoiseFilter(unittest.IsolatedAsyncioTestCase):
         )
 
         await filter.stop()
-
-
-if __name__ == "__main__":
-    unittest.main()

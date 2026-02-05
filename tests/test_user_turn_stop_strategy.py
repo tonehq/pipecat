@@ -506,7 +506,3 @@ class TestExternalUserTurnStopStrategy(unittest.IsolatedAsyncioTestCase):
 
         await strategy.process_frame(UserStoppedSpeakingFrame())
         self.assertTrue(should_start)
-
-
-if __name__ == "__main__":
-    unittest.main()

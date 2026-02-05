@@ -199,7 +199,3 @@ class TestExternalUserTurnStartStrategy(unittest.IsolatedAsyncioTestCase):
 
         await strategy.process_frame(UserStartedSpeakingFrame())
         self.assertTrue(should_start)
-
-
-if __name__ == "__main__":
-    unittest.main()

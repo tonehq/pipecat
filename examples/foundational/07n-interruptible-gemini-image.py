@@ -50,8 +50,9 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 load_dotenv(override=True)
 
-# We use lambdas to defer transport parameter creation until the transport
-# type is selected at runtime.
+# We store functions so objects (e.g. SileroVADAnalyzer) don't get
+# instantiated. The function will be called when the desired transport gets
+# selected.
 transport_params = {
     "daily": lambda: DailyParams(
         audio_in_enabled=True,
@@ -59,6 +60,7 @@ transport_params = {
         video_out_enabled=True,
         video_out_width=1024,
         video_out_height=1024,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
     "webrtc": lambda: TransportParams(
         audio_in_enabled=True,
@@ -66,6 +68,7 @@ transport_params = {
         video_out_enabled=True,
         video_out_width=1024,
         video_out_height=1024,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
 }
 
@@ -104,7 +107,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             user_turn_strategies=UserTurnStrategies(
                 stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())]
             ),
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
         ),
     )
 

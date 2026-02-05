@@ -31,7 +31,7 @@ Requirements:
     - [Optional] Anthropic API key (if using Claude with local config)
 
     Environment variables (set in .env or in your terminal using `export`):
-        DAILY_ROOM_URL=daily_room_url
+        DAILY_SAMPLE_ROOM_URL=daily_sample_room_url
         DAILY_API_KEY=daily_api_key
         OPENAI_API_KEY=openai_api_key
         ELEVENLABS_API_KEY=elevenlabs_api_key
@@ -132,20 +132,24 @@ async def get_initial_greeting(
         return "Hello! How can I help you today?"
 
 
-# We use lambdas to defer transport parameter creation until the transport
-# type is selected at runtime.
+# We store functions so objects (e.g. SileroVADAnalyzer) don't get
+# instantiated. The function will be called when the desired transport gets
+# selected.
 transport_params = {
     "daily": lambda: DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
     "twilio": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
     "webrtc": lambda: TransportParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
 }
 
@@ -248,7 +252,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             user_turn_strategies=UserTurnStrategies(
                 stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())]
             ),
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
         ),
     )
 

@@ -39,7 +39,6 @@ from loguru import logger
 
 from pipecat.runner.types import (
     DailyRunnerArguments,
-    LiveKitRunnerArguments,
     SmallWebRTCRunnerArguments,
     WebSocketRunnerArguments,
 )
@@ -96,9 +95,6 @@ def _detect_transport_type_from_message(message_data: dict) -> str:
 async def parse_telephony_websocket(websocket: WebSocket):
     """Parse telephony WebSocket messages and return transport type and call data.
 
-    Args:
-        websocket: FastAPI WebSocket connection from telephony provider.
-
     Returns:
         tuple: (transport_type: str, call_data: dict)
 
@@ -139,9 +135,6 @@ async def parse_telephony_websocket(websocket: WebSocket):
                 "to": str,
             }
 
-    Raises:
-        ValueError: If WebSocket closes before sending any messages.
-
     Example usage::
 
         transport_type, call_data = await parse_telephony_websocket(websocket)
@@ -149,31 +142,25 @@ async def parse_telephony_websocket(websocket: WebSocket):
             user_id = call_data["body"]["user_id"]
     """
     # Read first two messages
-    message_stream = websocket.iter_text()
-    first_message = {}
-    second_message = {}
+    start_data = websocket.iter_text()
 
     try:
-        # First message - required
-        first_message_raw = await message_stream.__anext__()
+        # First message
+        first_message_raw = await start_data.__anext__()
         logger.trace(f"First message: {first_message_raw}")
-        first_message = json.loads(first_message_raw) if first_message_raw else {}
-    except json.JSONDecodeError:
-        pass
-    except StopAsyncIteration:
-        raise ValueError("WebSocket closed before receiving telephony handshake messages")
+        try:
+            first_message = json.loads(first_message_raw)
+        except json.JSONDecodeError:
+            first_message = {}
 
-    try:
-        # Second message - optional, some providers may only send one
-        second_message_raw = await message_stream.__anext__()
+        # Second message
+        second_message_raw = await start_data.__anext__()
         logger.trace(f"Second message: {second_message_raw}")
-        second_message = json.loads(second_message_raw) if second_message_raw else {}
-    except json.JSONDecodeError:
-        pass
-    except StopAsyncIteration:
-        logger.warning("Only received one WebSocket message, expected two")
+        try:
+            second_message = json.loads(second_message_raw)
+        except json.JSONDecodeError:
+            second_message = {}
 
-    try:
         # Try auto-detection on both messages
         detected_type_first = _detect_transport_type_from_message(first_message)
         detected_type_second = _detect_transport_type_from_message(second_message)
@@ -202,6 +189,8 @@ async def parse_telephony_websocket(websocket: WebSocket):
                 # All custom parameters
                 "body": body_data,
             }
+
+            print(f"Call data ========================== {call_data}")
 
         elif transport_type == "telnyx":
             call_data = {
@@ -580,17 +569,6 @@ async def create_transport(
         # Create telephony transport with pre-parsed data
         return await _create_telephony_transport(
             runner_args.websocket, params, transport_type, call_data
-        )
-    elif isinstance(runner_args, LiveKitRunnerArguments):
-        params = _get_transport_params("livekit", transport_params)
-
-        from pipecat.transports.livekit.transport import LiveKitTransport
-
-        return LiveKitTransport(
-            runner_args.url,
-            runner_args.token,
-            runner_args.room_name,
-            params=params,
         )
 
     else:

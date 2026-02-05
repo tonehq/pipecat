@@ -56,7 +56,6 @@ from pipecat.processors.aggregators.llm_response import (
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.ai_service import AIService
-from pipecat.turns.user_turn_completion_mixin import UserTurnCompletionLLMServiceMixin
 
 # Type alias for a callable that handles LLM function calls.
 FunctionCallHandler = Callable[["FunctionCallParams"], Awaitable[None]]
@@ -143,7 +142,7 @@ class FunctionCallRunnerItem:
     run_llm: Optional[bool] = None
 
 
-class LLMService(UserTurnCompletionLLMServiceMixin, AIService):
+class LLMService(AIService):
     """Base class for all LLM services.
 
     Handles function calling registration and execution with support for both
@@ -171,23 +170,17 @@ class LLMService(UserTurnCompletionLLMServiceMixin, AIService):
     # However, subclasses should override this with a more specific adapter when necessary.
     adapter_class: Type[BaseLLMAdapter] = OpenAILLMAdapter
 
-    def __init__(
-        self, run_in_parallel: bool = True, function_call_timeout_secs: float = 10.0, **kwargs
-    ):
+    def __init__(self, run_in_parallel: bool = True, **kwargs):
         """Initialize the LLM service.
 
         Args:
             run_in_parallel: Whether to run function calls in parallel or sequentially.
                 Defaults to True.
-            function_call_timeout_secs: Timeout in seconds for deferred function calls.
-                Defaults to 10.0 seconds.
             **kwargs: Additional arguments passed to the parent AIService.
 
         """
         super().__init__(**kwargs)
         self._run_in_parallel = run_in_parallel
-        self._function_call_timeout_secs = function_call_timeout_secs
-        self._filter_incomplete_user_turns: bool = False
         self._start_callbacks = {}
         self._adapter = self.adapter_class()
         self._functions: Dict[Optional[str], FunctionCallRegistryItem] = {}
@@ -297,35 +290,6 @@ class LLMService(UserTurnCompletionLLMServiceMixin, AIService):
         if not self._run_in_parallel:
             await self._cancel_sequential_runner_task()
 
-    async def _update_settings(self, settings: Mapping[str, Any]):
-        """Update LLM service settings.
-
-        Handles turn completion settings specially since they are not model
-        parameters and should not be passed to the underlying LLM API.
-
-        Args:
-            settings: Dictionary of settings to update.
-        """
-        # Turn completion settings to extract (not model parameters)
-        turn_completion_keys = {"filter_incomplete_user_turns", "user_turn_completion_config"}
-
-        # Handle turn completion settings
-        if "filter_incomplete_user_turns" in settings:
-            self._filter_incomplete_user_turns = settings["filter_incomplete_user_turns"]
-            logger.info(
-                f"{self}: Incomplete turn filtering {'enabled' if self._filter_incomplete_user_turns else 'disabled'}"
-            )
-
-            # Configure the mixin with config object
-            if self._filter_incomplete_user_turns and "user_turn_completion_config" in settings:
-                self.set_user_turn_completion_config(settings["user_turn_completion_config"])
-
-        # Remove turn completion settings before passing to parent
-        settings = {k: v for k, v in settings.items() if k not in turn_completion_keys}
-
-        # Let the parent handle remaining model parameters
-        await super()._update_settings(settings)
-
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process a frame.
 
@@ -352,20 +316,6 @@ class LLMService(UserTurnCompletionLLMServiceMixin, AIService):
                 frame.skip_tts = self._skip_tts
 
         await super().push_frame(frame, direction)
-
-    async def _push_llm_text(self, text: str):
-        """Push LLM text, using turn completion detection if enabled.
-
-        This helper method simplifies text pushing in LLM implementations by
-        handling the conditional logic for turn completion internally.
-
-        Args:
-            text: The text content from the LLM to push.
-        """
-        if self._filter_incomplete_user_turns:
-            await self._push_turn_text(text)
-        else:
-            await self.push_frame(LLMTextFrame(text))
 
     async def _handle_interruptions(self, _: InterruptionFrame):
         for function_name, entry in self._functions.items():
@@ -646,18 +596,14 @@ class LLMService(UserTurnCompletionLLMServiceMixin, AIService):
             cancel_on_interruption=item.cancel_on_interruption,
         )
 
-        timeout_task: Optional[asyncio.Task] = None
+        callback_executed = False
 
         # Define a callback function that pushes a FunctionCallResultFrame upstream & downstream.
         async def function_call_result_callback(
             result: Any, *, properties: Optional[FunctionCallResultProperties] = None
         ):
-            nonlocal timeout_task
-
-            # Cancel timeout task if it exists
-            if timeout_task and not timeout_task.done():
-                await self.cancel_task(timeout_task)
-
+            nonlocal callback_executed
+            callback_executed = True
             await self.broadcast_frame(
                 FunctionCallResultFrame,
                 function_name=runner_item.function_name,
@@ -667,24 +613,6 @@ class LLMService(UserTurnCompletionLLMServiceMixin, AIService):
                 run_llm=runner_item.run_llm,
                 properties=properties,
             )
-
-        # Start a timeout task for deferred function calls
-        async def timeout_handler():
-            try:
-                await asyncio.sleep(self._function_call_timeout_secs)
-                logger.warning(
-                    f"{self} Function call [{runner_item.function_name}:{runner_item.tool_call_id}] timed out after {self._function_call_timeout_secs} seconds"
-                )
-                await function_call_result_callback(None)
-            except asyncio.CancelledError:
-                raise
-
-        timeout_task = self.create_task(timeout_handler())
-
-        # Yield to the event loop so the timeout task coroutine gets entered
-        # before it could be cancelled. Without this, cancelling the task before
-        # it starts would leave the coroutine in a "never awaited" state.
-        await asyncio.sleep(0)
 
         try:
             if isinstance(item.handler, DirectFunctionWrapper):
@@ -722,12 +650,12 @@ class LLMService(UserTurnCompletionLLMServiceMixin, AIService):
                     )
                     await item.handler(params)
         except Exception as e:
-            # Cancel timeout task if it exists
-            if timeout_task and not timeout_task.done():
-                await self.cancel_task(timeout_task)
             error_message = f"Error executing function call [{runner_item.function_name}]: {e}"
             logger.error(f"{self} {error_message}")
             await self.push_error(error_msg=error_message, exception=e, fatal=False)
+        finally:
+            if not callback_executed:
+                await function_call_result_callback(None)
 
     async def _cancel_function_call(self, function_name: Optional[str]):
         cancelled_tasks = set()

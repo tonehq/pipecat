@@ -23,8 +23,8 @@ from typing import (
 )
 
 from loguru import logger
+import requests
 
-from pipecat.audio.utils import create_stream_resampler
 from pipecat.frames.frames import (
     AggregatedTextFrame,
     AggregationType,
@@ -202,8 +202,6 @@ class TTSService(AIService):
                     DeprecationWarning,
                 )
             self._text_filters = [text_filter]
-
-        self._resampler = create_stream_resampler()
 
         self._stop_frame_task: Optional[asyncio.Task] = None
         self._stop_frame_queue: asyncio.Queue = asyncio.Queue()
@@ -508,40 +506,12 @@ class TTSService(AIService):
             await self._stop_frame_queue.put(frame)
 
     async def _stream_audio_frames_from_iterator(
-        self,
-        iterator: AsyncIterator[bytes],
-        *,
-        strip_wav_header: bool = False,
-        in_sample_rate: Optional[int] = None,
+        self, iterator: AsyncIterator[bytes], *, strip_wav_header: bool
     ) -> AsyncGenerator[Frame, None]:
-        """Stream audio frames from an async byte iterator with optional resampling.
-
-        For WAV data, use `strip_wav_header=True` to strip the header and
-        auto-detect the source sample rate. For raw PCM data, pass
-        `in_sample_rate` directly. Audio is resampled to `self.sample_rate` when
-        the source rate differs.
-
-        Args:
-            iterator: Async iterator yielding audio bytes.
-            strip_wav_header: Strip WAV header and parse source sample rate from it.
-            in_sample_rate: Source sample rate for raw PCM data. Overrides
-                WAV-detected rate if both are provided.
-
-        """
         buffer = bytearray()
-        source_sample_rate = in_sample_rate
         need_to_strip_wav_header = strip_wav_header
-
-        async def maybe_resample(audio: bytes) -> bytes:
-            if source_sample_rate and source_sample_rate != self.sample_rate:
-                return await self._resampler.resample(audio, source_sample_rate, self.sample_rate)
-            return audio
-
         async for chunk in iterator:
             if need_to_strip_wav_header and chunk.startswith(b"RIFF"):
-                # Parse sample rate from WAV header (bytes 24-28, little-endian uint32).
-                if len(chunk) >= 44 and source_sample_rate is None:
-                    source_sample_rate = int.from_bytes(chunk[24:28], "little")
                 chunk = chunk[44:]
                 need_to_strip_wav_header = False
 
@@ -551,18 +521,19 @@ class TTSService(AIService):
             # Round to nearest even number.
             aligned_length = len(buffer) & ~1  # 111111111...11110
             if aligned_length > 0:
-                aligned_chunk = await maybe_resample(bytes(buffer[:aligned_length]))
+                aligned_chunk = buffer[:aligned_length]
                 buffer = buffer[aligned_length:]  # keep any leftover byte
 
                 if len(aligned_chunk) > 0:
-                    yield TTSAudioRawFrame(aligned_chunk, self.sample_rate, 1)
+                    frame = TTSAudioRawFrame(bytes(aligned_chunk), self.sample_rate, 1)
+                    yield frame
 
         if len(buffer) > 0:
             # Make sure we don't need an extra padding byte.
             if len(buffer) % 2 == 1:
                 buffer.extend(b"\x00")
-            audio = await maybe_resample(bytes(buffer))
-            yield TTSAudioRawFrame(audio, self.sample_rate, 1)
+            frame = TTSAudioRawFrame(bytes(buffer), self.sample_rate, 1)
+            yield frame
 
     async def _handle_interruption(self, frame: InterruptionFrame, direction: FrameDirection):
         self._processing_text = False
@@ -686,6 +657,79 @@ class TTSService(AIService):
                 if has_started:
                     await self.push_frame(TTSStoppedFrame())
                     has_started = False
+
+    def get_stt_audios(self, type: str):
+        print("into get_stt_audios")
+        if type == "elevenlabs":
+            return self.get_stt_audios_from_elevenlabs()
+        elif type == "resemble":
+            print("into resemble")
+            return self.get_stt_audios_from_resemble()
+
+    
+    def get_stt_audios_from_resemble(self):
+        url = "https://app.resemble.ai/api/v2/voices"
+        headers = {
+        "Authorization": "Token n7hH11uD55QQAouKr9nnQgtt",
+        "Content-Type": "application/json"
+        }
+
+        params = {
+            "page": 1,
+            "page_size": 10
+        }
+
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+
+        result = {
+            "voices": [
+                {
+                    "id": v.get("uuid"),
+                    "name": v.get("name"),
+                    "default_language": v.get("default_language"),
+                    "voice_type": v.get("voice_type"),
+                }
+                for v in response.json()["items"]
+            ]
+        }
+
+        return result
+            
+
+    def get_stt_audios_from_elevenlabs(self):
+        url = "https://api.elevenlabs.io/v1/voices"
+
+        headers = {
+                "xi-api-key": "sk_9f4462e5bd5bcc3d5821b69b5e0f38a60e4abd7f29f2b316",
+            }
+
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+
+        data = response.json()["voices"]
+
+        result = {
+        "voices": [
+                {
+                "voice_id": v.get("voice_id"),
+                "name": v.get("name"),
+                "category": v.get("category"),
+                "description": v.get("description"),
+                "preview_url": v.get("preview_url"),
+                "language": v.get("language"),
+                "accent": v.get("accent"),
+                "gender": v.get("gender"),
+                "preview_url": v.get("preview_url"),
+                "preview_url": v.get("preview_url"),
+                }
+                for v in data
+                ]
+            }
+            
+        return result
+
+
 
 
 class WordTTSService(TTSService):

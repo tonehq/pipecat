@@ -192,7 +192,3 @@ class TestPatternPairAggregator(unittest.IsolatedAsyncioTestCase):
 
         # Buffer should be empty
         self.assertEqual(self.aggregator.text.text, "")
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -11,10 +11,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import (
-    LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
-)
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
@@ -27,23 +24,27 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 load_dotenv(override=True)
 
 
-# We use lambdas to defer transport parameter creation until the transport
-# type is selected at runtime.
+# We store functions so objects (e.g. SileroVADAnalyzer) don't get
+# instantiated. The function will be called when the desired transport gets
+# selected.
 transport_params = {
     "daily": lambda: DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
         video_in_enabled=False,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.5)),
     ),
     "twilio": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
         video_in_enabled=False,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.5)),
     ),
     "webrtc": lambda: TransportParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
         video_in_enabled=False,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.5)),
     ),
 }
 
@@ -125,16 +126,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
     # Set up conversation context and management
     context = LLMContext(messages)
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        user_params=LLMUserAggregatorParams(
-            # Set stop_secs to something roughly similar to the internal setting
-            # of the Multimodal Live api, just to align events. This doesn't
-            # really matter because we can only use the Multimodal Live API's
-            # phrase endpointing, for now.
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.5))
-        ),
-    )
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
     pipeline = Pipeline(
         [

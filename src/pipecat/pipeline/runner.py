@@ -63,6 +63,7 @@ class PipelineRunner(BaseObject):
             self._setup_sigterm()
 
     async def run(self, task: PipelineTask):
+        print("into run")
         """Run a pipeline task to completion.
 
         Args:

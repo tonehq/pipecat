@@ -240,7 +240,3 @@ class TestDTMFAggregator(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(len(transcription_frames), 1)
         self.assertEqual(transcription_frames[0].text, "DTMF: 0123456789*#")
-
-
-if __name__ == "__main__":
-    unittest.main()

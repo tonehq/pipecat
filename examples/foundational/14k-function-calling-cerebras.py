@@ -43,20 +43,24 @@ async def fetch_weather_from_api(params: FunctionCallParams):
     await params.result_callback({"conditions": "nice", "temperature": "75"})
 
 
-# We use lambdas to defer transport parameter creation until the transport
-# type is selected at runtime.
+# We store functions so objects (e.g. SileroVADAnalyzer) don't get
+# instantiated. The function will be called when the desired transport gets
+# selected.
 transport_params = {
     "daily": lambda: DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
     "twilio": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
     "webrtc": lambda: TransportParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
 }
 
@@ -121,7 +125,6 @@ Start by asking me for my location. Then, use 'get_weather_current' to give me a
             user_turn_strategies=UserTurnStrategies(
                 stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())]
             ),
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
         ),
     )
 

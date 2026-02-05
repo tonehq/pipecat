@@ -10,7 +10,6 @@ These types are used by the development runner to pass transport-specific
 information to bot functions.
 """
 
-import argparse
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -65,7 +64,6 @@ class RunnerArguments:
     handle_sigterm: bool = field(init=False, kw_only=True)
     pipeline_idle_timeout_secs: int = field(init=False, kw_only=True)
     body: Optional[Any] = field(default_factory=dict, kw_only=True)
-    cli_args: Optional[argparse.Namespace] = field(default=None, init=False, kw_only=True)
 
     def __post_init__(self):
         self.handle_sigint = False
@@ -108,18 +106,3 @@ class SmallWebRTCRunnerArguments(RunnerArguments):
     """
 
     webrtc_connection: Any
-
-
-@dataclass
-class LiveKitRunnerArguments(RunnerArguments):
-    """LiveKit transport session arguments for the runner.
-
-    Parameters:
-        room_name: LiveKit room name to join
-        token: Authentication token for the room
-        body: Additional request data
-    """
-
-    room_name: str
-    url: str
-    token: Optional[str] = None

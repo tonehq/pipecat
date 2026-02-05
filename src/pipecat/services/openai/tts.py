@@ -207,3 +207,21 @@ class OpenAITTSService(TTSService):
                 yield TTSStoppedFrame()
         except BadRequestError as e:
             yield ErrorFrame(error=f"Unknown error occurred: {e}")
+
+
+    def get_voices(self):
+        return [
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+            "echo",
+            "fable",
+            "onyx",
+            "nova",
+            "sage",
+            "shimmer",
+            "verse",
+            "marin",
+            "cedar",
+        ]

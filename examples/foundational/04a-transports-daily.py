@@ -49,6 +49,7 @@ async def main():
                 audio_in_enabled=True,
                 audio_out_enabled=True,
                 transcription_enabled=True,
+                vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
             ),
         )
 
@@ -75,7 +76,6 @@ async def main():
                         TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())
                     ]
                 ),
-                vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
             ),
         )
 

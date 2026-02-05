@@ -152,7 +152,3 @@ class TestUserTurnProcessor(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(should_start)
         self.assertTrue(should_stop)
         self.assertFalse(timeout)
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.extensions.ivr.ivr_navigator import IVRProcessor
 from pipecat.frames.frames import (
-    AggregatedTextFrame,
     LLMFullResponseEndFrame,
     LLMMessagesUpdateFrame,
     LLMTextFrame,
@@ -340,7 +339,7 @@ class TestIVRNavigation(unittest.IsolatedAsyncioTestCase):
         ]
 
         expected_down_frames = [
-            AggregatedTextFrame,  # LLMTextFrames aggregrated and converted to AggregatedTextFrame
+            LLMTextFrame,  # Should pass through unchanged
             LLMFullResponseEndFrame,
         ]
 
@@ -354,7 +353,3 @@ class TestIVRNavigation(unittest.IsolatedAsyncioTestCase):
             expected_down_frames=expected_down_frames,
             expected_up_frames=expected_up_frames,
         )
-
-
-if __name__ == "__main__":
-    unittest.main()

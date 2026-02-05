@@ -15,6 +15,7 @@ import base64
 import json
 import uuid
 from typing import Any, AsyncGenerator, Dict, List, Literal, Mapping, Optional, Tuple, Union
+import requests
 
 import aiohttp
 from loguru import logger
@@ -270,7 +271,7 @@ class ElevenLabsTTSService(AudioContextWordTTSService):
         self,
         *,
         api_key: str,
-        voice_id: str,
+        voice_id: str = None,
         model: str = "eleven_turbo_v2_5",
         url: str = "wss://api.elevenlabs.io",
         sample_rate: Optional[int] = None,
@@ -744,6 +745,40 @@ class ElevenLabsTTSService(AudioContextWordTTSService):
             yield None
         except Exception as e:
             yield ErrorFrame(error=f"Unknown error occurred: {e}")
+    
+
+    def get_voices(self):
+        url = "https://api.elevenlabs.io/v1/voices"
+
+        headers = {
+                "xi-api-key": self._api_key,
+            }
+
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+
+        data = response.json()["voices"]
+
+        result = {
+        "voices": [
+                {
+                "voice_id": v.get("voice_id"),
+                "name": v.get("name"),
+                "category": v.get("category"),
+                "description": v.get("description"),
+                "preview_url": v.get("preview_url"),
+                "language": v.get("language"),
+                "accent": v.get("accent"),
+                "gender": v.get("gender"),
+                "preview_url": v.get("preview_url"),
+                "preview_url": v.get("preview_url"),
+                }
+                for v in data
+                ]
+            }
+            
+        return result
+
 
 
 class ElevenLabsHttpTTSService(WordTTSService):
