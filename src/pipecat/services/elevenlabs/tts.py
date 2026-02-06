@@ -271,7 +271,7 @@ class ElevenLabsTTSService(AudioContextWordTTSService):
         self,
         *,
         api_key: str,
-        voice_id: str = None,
+        voice_id: str,
         model: str = "eleven_turbo_v2_5",
         url: str = "wss://api.elevenlabs.io",
         sample_rate: Optional[int] = None,
@@ -612,7 +612,7 @@ class ElevenLabsTTSService(AudioContextWordTTSService):
                     logger.debug(
                         f"Received a delayed message, recreating the context: {self._context_id}"
                     )
-                    await self.create_audio_context(self._context_id)
+                    await self.create_audio_context(self._context_id or "")
                 else:
                     # This can happen if a message is received _after_ we have closed a context
                     # due to user interruption but _before_ the `isFinal` message for the context
@@ -818,7 +818,7 @@ class ElevenLabsHttpTTSService(WordTTSService):
         self,
         *,
         api_key: str,
-        voice_id: str,
+        voice_id: str | None = None,
         aiohttp_session: aiohttp.ClientSession,
         model: str = "eleven_turbo_v2_5",
         base_url: str = "https://api.elevenlabs.io",

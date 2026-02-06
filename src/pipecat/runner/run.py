@@ -84,7 +84,7 @@ from loguru import logger
 # Skip when already running as module (python -m pipecat.runner.run) to avoid infinite loop.
 if __name__ == "__main__" and (__package__ or "").strip() != "pipecat.runner":
     import subprocess
-    _src_dir = Path(__file__).resolve().parent.parent.parent  # pipecatfork/src
+    _src_dir = Path(__file__).resolve().parent.parent.parent  # pipecat/src
     sys.exit(
         subprocess.call(
             [sys.executable, "-m", "pipecat.runner.run"] + sys.argv[1:],
@@ -200,19 +200,19 @@ def _get_bot_module():
                 pass
         return None
 
-    # When runner is started from pipecat path (e.g. python pipecatfork/.../run.py),
-    # cwd may be pipecatfork/src; look for bot in workspace root (directory containing
-    # pipecatfork), e.g. Tone/core/bot.py
+    # When runner is started from pipecat path (e.g. python pipecat/.../run.py),
+    # cwd may be pipecat/src; look for bot in workspace root (directory containing
+    # pipecat), e.g. Tone/core/bot.py
     try:
         _runner_file = Path(__file__).resolve()
-        # run.py -> runner -> pipecat -> src -> pipecatfork -> workspace root (Tone)
-        _src_dir = _runner_file.parent.parent.parent  # pipecatfork/src
-        _pipecatfork_dir = _src_dir.parent  # pipecatfork
-        _workspace_root = _pipecatfork_dir.parent  # directory containing pipecatfork (Tone)
+        # run.py -> runner -> pipecat -> src -> pipecat -> workspace root (Tone)
+        _src_dir = _runner_file.parent.parent.parent  # pipecat/src
+        _pipecat_dir = _src_dir.parent  # pipecat
+        _workspace_root = _pipecat_dir.parent  # directory containing pipecat (Tone)
         module = _try_workspace_bot(_workspace_root)
         if module is not None:
             return module
-        # Fallback: cwd may be pipecatfork/src when run via -m pipecat.runner.run; workspace = cwd.parent.parent (Tone)
+        # Fallback: cwd may be pipecat/src when run via -m pipecat.runner.run; workspace = cwd.parent.parent (Tone)
         _cwd = Path(os.getcwd()).resolve()
         if _cwd.name == "src" and (_cwd.parent.parent / "core").is_dir():
             module = _try_workspace_bot(_cwd.parent.parent)
