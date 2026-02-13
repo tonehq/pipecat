@@ -111,6 +111,33 @@ class GroqTTSService(TTSService):
         """
         return True
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+        raw = [
+            {"voice_id": "autumn", "name": "Autumn", "language": ["en"], "gender": "female", "accent": "American"},
+            {"voice_id": "diana", "name": "Diana", "language": ["en"], "gender": "female", "accent": "American"},
+            {"voice_id": "hannah", "name": "Hannah", "language": ["en"], "gender": "female", "accent": "American"},
+            {"voice_id": "austin", "name": "Austin", "language": ["en"], "gender": "male", "accent": "American"},
+            {"voice_id": "daniel", "name": "Daniel", "language": ["en"], "gender": "male", "accent": "American"},
+            {"voice_id": "troy", "name": "Troy", "language": ["en"], "gender": "male", "accent": "American"},
+            {"voice_id": "fahad", "name": "Fahad", "language": ["ar"], "gender": "male", "accent": "Saudi"},
+            {"voice_id": "sultan", "name": "Sultan", "language": ["ar"], "gender": "male", "accent": "Saudi"},
+            {"voice_id": "lulwa", "name": "Lulwa", "language": ["ar"], "gender": "female", "accent": "Saudi"},
+            {"voice_id": "noura", "name": "Noura", "language": ["ar"], "gender": "female", "accent": "Saudi"},
+        ]
+        return [
+            {
+                "name": v["name"],
+                "voice_id": v["voice_id"],
+                "description": None,
+                "gender": v["gender"],
+                "language": v["language"][0] if v["language"] else None,
+                "sample_url": None,
+                "accent": v["accent"],
+            }
+            for v in raw
+        ]
+
     @traced_tts
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
         """Generate speech from text using Groq's TTS API.

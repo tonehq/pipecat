@@ -66,6 +66,10 @@ class PiperTTSService(TTSService):
         """
         return True
 
+    @classmethod
+    def get_voices(self, api_key: str):
+        return []
+
     @traced_tts
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
         """Generate speech from text using Piper's HTTP API.

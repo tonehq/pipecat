@@ -496,6 +496,44 @@ class InworldTTSService(AudioContextWordTTSService):
         """
         return True
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+        import requests
+
+        url = "https://api.inworld.ai/tts/v1/voices?filter=language=en"
+        headers = {
+            "Authorization": f"Basic {api_key}",
+        }
+
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        items = data.get("voices", data.get("data", [])) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        result = []
+        for v in items:
+            if not isinstance(v, dict):
+                continue
+            tags = v.get("tags") or []
+            gender = None
+            for t in tags:
+                t_lower = str(t).lower()
+                if t_lower in ("male", "female"):
+                    gender = t_lower
+                    break
+            langs = v.get("languages") or []
+            lang = langs[0] if langs else None
+            result.append({
+                "name": v.get("displayName") or v.get("name"),
+                "voice_id": v.get("voiceId") or v.get("voice_id") or v.get("id"),
+                "description": v.get("description"),
+                "gender": gender,
+                "language": lang,
+                "sample_url": v.get("preview_url") or v.get("sample_url"),
+                "accent": v.get("accent"),
+            })
+        return result
+
+
     async def start(self, frame: StartFrame):
         """Start the Inworld WebSocket TTS service.
 

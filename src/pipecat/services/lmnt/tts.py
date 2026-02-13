@@ -124,6 +124,34 @@ class LmntTTSService(InterruptibleTTSService):
         """
         return True
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+        import requests
+
+        url = "https://api.lmnt.com/v1/ai/voice/list?owner=system"
+        headers = {
+            "X-API-Key": api_key,
+        }
+
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        items = data if isinstance(data, list) else data.get("voices", data.get("data", [])) or []
+        result = []
+        for v in items:
+            if not isinstance(v, dict):
+                continue
+            result.append({
+                "name": v.get("name"),
+                "voice_id": v.get("id") or v.get("voice_id"),
+                "description": v.get("description"),
+                "gender": v.get("gender"),
+                "language": v.get("language"),
+                "sample_url": v.get("preview_url") or v.get("sample_url"),
+                "accent": v.get("accent"),
+            })
+        return result
+
     def language_to_service_language(self, language: Language) -> Optional[str]:
         """Convert a Language enum to LMNT service language format.
 

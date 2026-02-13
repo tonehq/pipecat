@@ -18,8 +18,8 @@ Features:
 
 from typing import Any, AsyncGenerator, Dict, Optional
 
-from camb import StreamTtsOutputConfiguration
-from camb.client import AsyncCambAI
+# from camb import StreamTtsOutputConfiguration
+# from camb.client import AsyncCambAI
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -224,6 +224,33 @@ class CambTTSService(TTSService):
         self._voice_id = voice_id
 
         self._client = None
+
+
+    @classmethod
+    def get_voices(cls, api_key: str):
+        import requests
+
+        url = "https://client.camb.ai/apis/list-voices"
+        headers = {
+            "x-api-key": api_key,
+        }
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, list):
+            data = data.get("voices", data.get("data", [])) or []
+        result = []
+        for v in data:
+            result.append({
+                "name": v.get("voice_name") or v.get("name"),
+                "voice_id": str(v.get("id", "")) if v.get("id") is not None else v.get("voice_id"),
+                "description": v.get("description"),
+                "gender": v.get("gender") if isinstance(v.get("gender"), str) else None,
+                "language": v.get("language"),
+                "sample_url": v.get("preview_url") or v.get("sample_url"),
+                "accent": v.get("accent"),
+            })
+        return result
 
     def can_generate_metrics(self) -> bool:
         """Check if this service can generate processing metrics.

@@ -116,6 +116,10 @@ class XTTSService(TTSService):
         """
         return True
 
+    @classmethod
+    def get_voices(self, api_key: str):
+        return []
+
     def language_to_service_language(self, language: Language) -> Optional[str]:
         """Convert a Language enum to XTTS service language format.
 

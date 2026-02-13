@@ -236,6 +236,38 @@ class MiniMaxHttpTTSService(TTSService):
         if params.latex_read is not None:
             self._settings["voice_setting"]["latex_read"] = params.latex_read
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+        import requests
+
+        url = "https://api.minimax.io/v1/get_voice"
+        headers = {
+            "accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+
+        body = {"voice_type": "all"}
+
+        response = requests.post(url, headers=headers, json=body)
+        response.raise_for_status()
+        data = response.json().get("system_voice", [])
+        result = []
+        for v in data:
+            desc = v.get("description")
+            if isinstance(desc, list) and desc:
+                desc = desc[0]
+            result.append({
+                "name": v.get("voice_name") or v.get("name"),
+                "voice_id": v.get("voice_id"),
+                "description": desc,
+                "gender": v.get("gender"),
+                "language": v.get("language"),
+                "sample_url": v.get("preview_url") or v.get("sample_url"),
+                "accent": v.get("accent"),
+            })
+        return result
+
     def can_generate_metrics(self) -> bool:
         """Check if this service can generate processing metrics.
 

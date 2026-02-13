@@ -546,6 +546,31 @@ class RimeHttpTTSService(TTSService):
         """
         return True
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+        import requests
+
+        url = "https://users.rime.ai/data/voices/voice_details.json"
+
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, list):
+            data = []
+        result = []
+        for v in data:
+            result.append({
+                "name": v.get("speaker") or v.get("name"),
+                "voice_id": v.get("speaker") or v.get("voice_id"),
+                "description": None,
+                "gender": v.get("gender"),
+                "language": v.get("language") or v.get("lang"),
+                "sample_url": v.get("sample_url") or v.get("preview_url"),
+                "accent": v.get("dialect"),
+            })
+        return result
+        
+
     def language_to_service_language(self, language: Language) -> str | None:
         """Convert pipecat language to Rime language code.
 

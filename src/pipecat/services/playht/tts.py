@@ -191,6 +191,44 @@ class PlayHTTTSService(InterruptibleTTSService):
         """
         return True
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+        import requests
+
+        url = "https://api.play.ht/api/v2/voices"
+        headers = {"accept": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        print("playht voices", data)
+        
+        items = data.get("voices", data.get("data", data)) if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            items = []
+        result = []
+        for v in items:
+            if not isinstance(v, dict):
+                continue
+            lang = v.get("language") or v.get("language_code")
+            if isinstance(lang, dict):
+                lang = lang.get("code") or lang.get("language")
+            result.append({
+                "name": v.get("name") or v.get("voice_name"),
+                "voice_id": v.get("id") or v.get("voice_id"),
+                "description": v.get("description"),
+                "gender": v.get("gender"),
+                "language": lang,
+                "sample_url": v.get("preview_url") or v.get("sample_url") or v.get("sample"),
+                "accent": v.get("accent") or v.get("dialect"),
+            })
+        return result
+
+
+
     def language_to_service_language(self, language: Language) -> Optional[str]:
         """Convert a Language enum to PlayHT service language format.
 

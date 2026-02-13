@@ -109,6 +109,36 @@ class ResembleAITTSService(AudioContextWordTTSService):
         """
         return True
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+        import requests
+
+        url = "https://app.resemble.ai/api/v2/voices?page=1&page_size=183"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+        }
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        items = data.get("items", data.get("voices", data.get("data", []))) or []
+        result = []
+        for v in items:
+            if not isinstance(v, dict):
+                continue
+            langs = v.get("supported_languages") or []
+            lang = v.get("default_language") or (langs[0] if langs else None)
+            result.append({
+                "name": v.get("name"),
+                "voice_id": v.get("uuid") or v.get("voice_id") or v.get("id"),
+                "description": v.get("description"),
+                "gender": v.get("gender"),
+                "language": lang,
+                "sample_url": v.get("sample_url") or v.get("preview_url"),
+                "accent": v.get("accent"),
+            })
+        return result
+
+
     def _build_msg(self, text: str = "") -> str:
         """Build a JSON message for the Resemble AI WebSocket API.
 

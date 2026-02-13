@@ -209,19 +209,21 @@ class OpenAITTSService(TTSService):
             yield ErrorFrame(error=f"Unknown error occurred: {e}")
 
 
-    def get_voices(self):
+    @classmethod
+    def get_voices(cls, api_key: str):
+        voice_ids = [
+            "alloy", "ash", "ballad", "coral", "echo", "fable",
+            "onyx", "nova", "sage", "shimmer", "verse", "marin", "cedar",
+        ]
         return [
-            "alloy",
-            "ash",
-            "ballad",
-            "coral",
-            "echo",
-            "fable",
-            "onyx",
-            "nova",
-            "sage",
-            "shimmer",
-            "verse",
-            "marin",
-            "cedar",
+            {
+                "name": vid,
+                "voice_id": vid,
+                "description": None,
+                "gender": None,
+                "language": None,
+                "sample_url": None,
+                "accent": None,
+            }
+            for vid in voice_ids
         ]

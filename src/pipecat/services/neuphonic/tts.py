@@ -13,6 +13,7 @@ text-to-speech API for real-time audio synthesis.
 import asyncio
 import base64
 import json
+from termios import VSTOP
 from typing import Any, AsyncGenerator, Mapping, Optional
 
 import aiohttp
@@ -37,6 +38,9 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.tts_service import InterruptibleTTSService, TTSService
 from pipecat.transcriptions.language import Language, resolve_language
 from pipecat.utils.tracing.service_decorators import traced_tts
+from pyneuphonic import Neuphonic, TTSConfig
+from requests import api
+
 
 try:
     from websockets.asyncio.client import connect as websocket_connect
@@ -450,6 +454,31 @@ class NeuphonicHttpTTSService(TTSService):
             The Neuphonic-specific language code, or None if not supported.
         """
         return language_to_neuphonic_lang_code(language)
+
+    @classmethod
+    def get_voices(cls, api_key: str):
+        from pyneuphonic import Neuphonic
+
+        client = Neuphonic(api_key=api_key)
+        response = client.voices.list()
+        data = response.data.get("voices", [])
+
+        result = []
+        for voice in data:
+            tags = voice.get("tags")
+            gender = tags[0] if tags else None
+            result.append({
+                "name": voice.get("name"),
+                "voice_id": voice.get("voice_id"),
+                "description": voice.get("description"),
+                "gender": gender,
+                "language": voice.get("language"),
+                "sample_url": voice.get("preview_url") or voice.get("sample_url"),
+                "accent": voice.get("accent"),
+            })
+        return result
+
+
 
     async def start(self, frame: StartFrame):
         """Start the Neuphonic HTTP TTS service.

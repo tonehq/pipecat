@@ -11,6 +11,7 @@ import base64
 import json
 import uuid
 from typing import AsyncGenerator, Optional
+import requests
 
 import aiohttp
 from loguru import logger
@@ -31,6 +32,8 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.tts_service import AudioContextTTSService, TTSService
 from pipecat.transcriptions.language import Language, resolve_language
 from pipecat.utils.tracing.service_decorators import traced_tts
+
+from ee import database
 
 try:
     import websockets
@@ -480,6 +483,31 @@ class AsyncAIHttpTTSService(TTSService):
         self.set_model_name(model)
 
         self._session = aiohttp_session
+
+    @classmethod
+    def get_voices(cls, api_key: str):
+        url = "https://api.async.com/voices"
+
+        headers = {
+            "x-api-key": api_key,
+        }
+
+        response = requests.post(url, headers=headers)
+        response.raise_for_status()
+
+        data = response.json().get("voices", [])
+        result = []
+        for v in data:
+            result.append({
+                "name": v.get("name") or v.get("voice_name"),
+                "voice_id": v.get("id") or v.get("voice_id"),
+                "description": v.get("description"),
+                "gender": v.get("gender"),
+                "language": v.get("language"),
+                "sample_url": v.get("preview_url") or v.get("sample_url"),
+                "accent": v.get("accent"),
+            })
+        return result
 
     def can_generate_metrics(self) -> bool:
         """Check if this service can generate processing metrics.

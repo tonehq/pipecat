@@ -310,6 +310,32 @@ class CartesiaTTSService(AudioContextWordTTSService):
         self._context_id = None
         self._receive_task = None
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+        import requests
+
+        url = "https://api.cartesia.ai/voices?limit=100"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Cartesia-Version": "2025-04-16",
+        }
+
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json().get("data", [])
+        result = []
+        for v in data:
+            result.append({
+                "name": v.get("name"),
+                "voice_id": v.get("id") or v.get("voice_id"),
+                "description": v.get("description"),
+                "gender": v.get("gender"),
+                "language": v.get("language"),
+                "sample_url": v.get("preview_file_url") or v.get("preview_url") or v.get("sample_url"),
+                "accent": v.get("accent"),
+            })
+        return result
+
     def can_generate_metrics(self) -> bool:
         """Check if this service can generate processing metrics.
 

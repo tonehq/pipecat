@@ -125,6 +125,59 @@ class HumeTTSService(WordTTSService):
         self._cumulative_time = 0.0
         self._started = False
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+        import requests
+
+        base_url = "https://api.hume.ai/v0/tts/voices"
+        headers = {
+            "X-Hume-Api-Key": api_key,
+        }
+
+        all_voices = []
+        page_number = 0
+        page_size = 100
+
+        while True:
+            params = {"provider": "HUME_AI", "page_number": page_number, "page_size": page_size}
+            response = requests.get(base_url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            voices_page = data.get("voices_page") or []
+            if not voices_page:
+                break
+
+            all_voices.extend(voices_page)
+            total_pages = data.get("total_pages", 1)
+            if page_number >= total_pages - 1:
+                break
+            page_number += 1
+
+        result = []
+        for v in all_voices:
+            if not isinstance(v, dict):
+                continue
+            tags = v.get("tags") or {}
+            language_list = tags.get("LANGUAGE") or []
+            language = language_list[0] if language_list else None
+            gender_list = tags.get("GENDER") or []
+            gender_val = gender_list[0] if gender_list else None
+            gender = gender_val.lower() if isinstance(gender_val, str) else gender_val
+            accent_list = tags.get("ACCENT") or []
+            accent = ", ".join(accent_list) if isinstance(accent_list, list) and accent_list else None
+
+            result.append({
+                "name": v.get("name"),
+                "voice_id": v.get("id") or v.get("voice_id"),
+                "description": None,
+                "gender": gender,
+                "language": language,
+                "sample_url": v.get("preview_url") or v.get("sample_url"),
+                "accent": accent,
+            })
+        return result
+
     def can_generate_metrics(self) -> bool:
         """Can generate metrics.
 

@@ -269,6 +269,18 @@ class TTSService(AIService):
         """
         pass
 
+    @classmethod
+    @abstractmethod
+    def get_voices(cls, api_key: str) -> List[Dict[str, Any]]:
+        """Get the voices available for the TTS service.
+
+        Returns:
+            A list of dictionaries, each with normalized voice fields:
+            name, voice_id, description, gender, language, sample_url, accent.
+            Missing values may be None.
+        """
+        pass
+
     def language_to_service_language(self, language: Language) -> Optional[str]:
         """Convert a language to the service-specific language format.
 

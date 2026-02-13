@@ -600,6 +600,37 @@ class GoogleHttpTTSService(TTSService):
             credentials=creds, client_options=client_options
         )
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+        from google.cloud import texttospeech
+
+        client = texttospeech.TextToSpeechClient()
+        response = client.list_voices()
+
+        voices = response.voices if hasattr(response, "voices") else []
+        result = []
+        for v in voices:
+            lang = v.language_codes[0] if v.language_codes else None
+            gender = None
+            if hasattr(v, "ssml_gender") and v.ssml_gender:
+                g = str(v.ssml_gender).upper()
+                if "FEMALE" in g:
+                    gender = "female"
+                elif "MALE" in g:
+                    gender = "male"
+                else:
+                    gender = "neutral"
+            result.append({
+                "name": v.name or getattr(v, "name", None),
+                "voice_id": v.name,
+                "description": None,
+                "gender": gender,
+                "language": lang,
+                "sample_url": None,
+                "accent": None,
+            })
+        return result
+
     def can_generate_metrics(self) -> bool:
         """Check if this service can generate processing metrics.
 

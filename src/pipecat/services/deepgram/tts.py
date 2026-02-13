@@ -14,6 +14,7 @@ import json
 from typing import AsyncGenerator, Optional
 
 import aiohttp
+from deepgram.clients.speak.v1.rest.options import dataclass
 from loguru import logger
 
 from pipecat.frames.frames import (
@@ -364,6 +365,32 @@ class DeepgramHttpTTSService(TTSService):
             True, as Deepgram TTS service supports metrics generation.
         """
         return True
+
+    @classmethod
+    def get_voices(cls, api_key: str):
+        import requests
+
+        url = "https://api.deepgram.com/v1/models"
+        headers = {"Authorization": api_key}
+
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json().get("tts", [])
+        result = []
+        for v in data:
+            meta = v.get("metadata") or {}
+            langs = v.get("languages", [])
+            lang = langs[0] if langs else None
+            result.append({
+                "name": v.get("name"),
+                "voice_id": v.get("name") or v.get("canonical_name") or v.get("uuid"),
+                "description": meta.get("description"),
+                "gender": meta.get("gender"),
+                "language": lang,
+                "sample_url": meta.get("sample"),
+                "accent": meta.get("accent"),
+            })
+        return result
 
     @traced_tts
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:

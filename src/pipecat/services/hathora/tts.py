@@ -114,6 +114,10 @@ class HathoraTTSService(TTSService):
         """
         return True
 
+    @classmethod
+    def get_voices(self, api_key: str):
+        return []
+
     @traced_tts
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
         """Run text-to-speech synthesis on the provided text.

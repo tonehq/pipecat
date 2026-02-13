@@ -188,6 +188,53 @@ class SarvamHttpTTSService(TTSService):
         self.set_model_name(model)
         self.set_voice(voice_id)
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+    # Language list (Sarvam Bulbul v3 supports all for every speaker)
+        languages = [
+        "hi-IN", "bn-IN", "ta-IN", "te-IN", "gu-IN",
+        "kn-IN", "ml-IN", "mr-IN", "pa-IN", "od-IN", "en-IN"
+        ]
+
+    # Gender mapping
+        male_voices = {
+        "Shubh", "Aditya", "Rahul", "Rohan", "Amit", "Dev", "Ratan",
+        "Varun", "Manan", "Sumit", "Kabir", "Aayan", "Ashutosh",
+        "Advait", "Anand", "Tarun", "Sunny", "Mani", "Gokul",
+        "Vijay", "Mohit", "Rehan", "Soham"
+        }
+
+        female_voices = {
+        "Ritu", "Priya", "Neha", "Pooja", "Simran", "Kavya", "Ishita",
+        "Shreya", "Roopa", "Amelia", "Sophia", "Tanya", "Shruti",
+        "Suhani", "Kavitha", "Rupali"
+        }
+
+        speakers = list(male_voices | female_voices)
+
+        voice_catalog = []
+
+        for speaker in speakers:
+            gender = (
+                "male" if speaker in male_voices
+                else "female" if speaker in female_voices
+                else "unknown"
+            )
+
+            for lang in languages:
+                voice_catalog.append({
+                    "name": speaker,
+                    "voice_id": f"sarvam-{speaker.lower()}-{lang}",
+                    "description": None,
+                    "gender": gender,
+                    "language": lang,
+                    "sample_url": None,
+                    "accent": None,
+                })
+
+        return voice_catalog
+
+
     def can_generate_metrics(self) -> bool:
         """Check if this service can generate processing metrics.
 

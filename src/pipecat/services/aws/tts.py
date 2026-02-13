@@ -208,6 +208,617 @@ class AWSPollyTTSService(TTSService):
         """
         return True
 
+    @classmethod
+    def get_voices(cls, api_key: str):
+        raw = [
+  {
+    "voice_id": "Hala",
+    "name": "Hala",
+    "language": "Arabic",
+    "description": "",
+    "accent": "Gulf",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Zayd",
+    "name": "Zayd",
+    "language": "Arabic",
+    "description": "",
+    "accent": "Gulf",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Lisa",
+    "name": "Lisa",
+    "language": "Dutch",
+    "description": "",
+    "accent": "Belgian",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Arlet",
+    "name": "Arlet",
+    "language": "Catalan",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Jitka",
+    "name": "Jitka",
+    "language": "Czech",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Hiujin",
+    "name": "Hiujin",
+    "language": "Chinese",
+    "description": "",
+    "accent": "Cantonese",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Zhiyu",
+    "name": "Zhiyu",
+    "language": "Chinese",
+    "description": "",
+    "accent": "Mandarin",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Sofie",
+    "name": "Sofie",
+    "language": "Danish",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Laura",
+    "name": "Laura",
+    "language": "Dutch",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Olivia",
+    "name": "Olivia",
+    "language": "English",
+    "description": "",
+    "accent": "Australian",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Amy",
+    "name": "Amy",
+    "language": "English",
+    "description": "",
+    "accent": "British",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Emma",
+    "name": "Emma",
+    "language": "English",
+    "description": "",
+    "accent": "British",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Brian",
+    "name": "Brian",
+    "language": "English",
+    "description": "",
+    "accent": "British",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Arthur",
+    "name": "Arthur",
+    "language": "English",
+    "description": "",
+    "accent": "British",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Kajal",
+    "name": "Kajal",
+    "language": "English",
+    "description": "",
+    "accent": "Indian",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Niamh",
+    "name": "Niamh",
+    "language": "English",
+    "description": "",
+    "accent": "Irish",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Aria",
+    "name": "Aria",
+    "language": "English",
+    "description": "",
+    "accent": "New Zealand",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Jasmine",
+    "name": "Jasmine",
+    "language": "English",
+    "description": "",
+    "accent": "Singaporean",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Ayanda",
+    "name": "Ayanda",
+    "language": "English",
+    "description": "",
+    "accent": "South African",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Danielle",
+    "name": "Danielle",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Gregory",
+    "name": "Gregory",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Ivy",
+    "name": "Ivy",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Joanna",
+    "name": "Joanna",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Kendra",
+    "name": "Kendra",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Kimberly",
+    "name": "Kimberly",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Salli",
+    "name": "Salli",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Joey",
+    "name": "Joey",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Justin",
+    "name": "Justin",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Kevin",
+    "name": "Kevin",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Matthew",
+    "name": "Matthew",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Ruth",
+    "name": "Ruth",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Stephen",
+    "name": "Stephen",
+    "language": "English",
+    "description": "",
+    "accent": "US",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Suvi",
+    "name": "Suvi",
+    "language": "Finnish",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Celine",
+    "name": "Céline",
+    "language": "French",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Lea",
+    "name": "Léa",
+    "language": "French",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Remi",
+    "name": "Rémi",
+    "language": "French",
+    "description": "",
+    "accent": "",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Isabelle",
+    "name": "Isabelle",
+    "language": "French",
+    "description": "",
+    "accent": "Belgian",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Gabrielle",
+    "name": "Gabrielle",
+    "language": "French",
+    "description": "",
+    "accent": "Canadian",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Liam",
+    "name": "Liam",
+    "language": "French",
+    "description": "",
+    "accent": "Canadian",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Vicki",
+    "name": "Vicki",
+    "language": "German",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Daniel",
+    "name": "Daniel",
+    "language": "German",
+    "description": "",
+    "accent": "",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Hannah",
+    "name": "Hannah",
+    "language": "German",
+    "description": "",
+    "accent": "Austrian",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Sabrina",
+    "name": "Sabrina",
+    "language": "German",
+    "description": "",
+    "accent": "Swiss",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Kajal",
+    "name": "Kajal",
+    "language": "Hindi",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Bianca",
+    "name": "Bianca",
+    "language": "Italian",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Adriano",
+    "name": "Adriano",
+    "language": "Italian",
+    "description": "",
+    "accent": "",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Takumi",
+    "name": "Takumi",
+    "language": "Japanese",
+    "description": "",
+    "accent": "",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Kazuha",
+    "name": "Kazuha",
+    "language": "Japanese",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Tomoko",
+    "name": "Tomoko",
+    "language": "Japanese",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Seoyeon",
+    "name": "Seoyeon",
+    "language": "Korean",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Jihye",
+    "name": "Jihye",
+    "language": "Korean",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Ida",
+    "name": "Ida",
+    "language": "Norwegian",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Ewa",
+    "name": "Ewa",
+    "language": "Polish",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Ola",
+    "name": "Ola",
+    "language": "Polish",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Camila",
+    "name": "Camila",
+    "language": "Portuguese",
+    "description": "",
+    "accent": "Brazilian",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Vitoria",
+    "name": "Vitória",
+    "language": "Portuguese",
+    "description": "",
+    "accent": "Brazilian",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Thiago",
+    "name": "Thiago",
+    "language": "Portuguese",
+    "description": "",
+    "accent": "Brazilian",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Ines",
+    "name": "Inês",
+    "language": "Portuguese",
+    "description": "",
+    "accent": "European",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Lucia",
+    "name": "Lucia",
+    "language": "Spanish",
+    "description": "",
+    "accent": "Spain",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Sergio",
+    "name": "Sergio",
+    "language": "Spanish",
+    "description": "",
+    "accent": "Spain",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Mia",
+    "name": "Mia",
+    "language": "Spanish",
+    "description": "",
+    "accent": "Mexican",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Andres",
+    "name": "Andrés",
+    "language": "Spanish",
+    "description": "",
+    "accent": "Mexican",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Lupe",
+    "name": "Lupe",
+    "language": "Spanish",
+    "description": "",
+    "accent": "US",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Pedro",
+    "name": "Pedro",
+    "language": "Spanish",
+    "description": "",
+    "accent": "US",
+    "gender": "Male",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Elin",
+    "name": "Elin",
+    "language": "Swedish",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  },
+  {
+    "voice_id": "Burcu",
+    "name": "Burcu",
+    "language": "Turkish",
+    "description": "",
+    "accent": "",
+    "gender": "Female",
+    "preview_url": ""
+  }
+]
+        return [
+            {
+                "name": v["name"],
+                "voice_id": v["voice_id"],
+                "description": v.get("description") or None,
+                "gender": v.get("gender"),
+                "language": v.get("language"),
+                "sample_url": v.get("preview_url") or None,
+                "accent": v.get("accent") or None,
+            }
+            for v in raw
+        ]
+
     def language_to_service_language(self, language: Language) -> Optional[str]:
         """Convert a Language enum to AWS Polly language format.
 

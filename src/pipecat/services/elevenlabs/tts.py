@@ -271,7 +271,7 @@ class ElevenLabsTTSService(AudioContextWordTTSService):
         self,
         *,
         api_key: str,
-        voice_id: str,
+        voice_id: str | None = None,
         model: str = "eleven_turbo_v2_5",
         url: str = "wss://api.elevenlabs.io",
         sample_rate: Optional[int] = None,
@@ -747,36 +747,35 @@ class ElevenLabsTTSService(AudioContextWordTTSService):
             yield ErrorFrame(error=f"Unknown error occurred: {e}")
     
 
-    def get_voices(self):
+    @classmethod
+    def get_voices(cls, api_key: str):
         url = "https://api.elevenlabs.io/v1/voices"
 
         headers = {
-                "xi-api-key": self._api_key,
+                "xi-api-key": api_key,
             }
 
         response = requests.get(url, headers=headers)
         response.raise_for_status()
 
-        data = response.json()["voices"]
-
-        result = {
-        "voices": [
-                {
-                "voice_id": v.get("voice_id"),
+        data = response.json().get("voices", [])
+        result = []
+        for v in data:
+            labels = v.get("labels") or {}
+            langs = v.get("verified_languages") or []
+            lang = None
+            if langs:
+                first = langs[0] if isinstance(langs[0], dict) else langs[0]
+                lang = first.get("language", first) if isinstance(first, dict) else first
+            result.append({
                 "name": v.get("name"),
-                "category": v.get("category"),
+                "voice_id": v.get("voice_id"),
                 "description": v.get("description"),
-                "preview_url": v.get("preview_url"),
-                "language": v.get("language"),
-                "accent": v.get("accent"),
-                "gender": v.get("gender"),
-                "preview_url": v.get("preview_url"),
-                "preview_url": v.get("preview_url"),
-                }
-                for v in data
-                ]
-            }
-            
+                "gender": labels.get("gender") or v.get("gender"),
+                "language": lang or v.get("language"),
+                "sample_url": v.get("preview_url"),
+                "accent": labels.get("accent") or v.get("accent"),
+            })
         return result
 
 

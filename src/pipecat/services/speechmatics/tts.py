@@ -227,7 +227,27 @@ class SpeechmaticsTTSService(TTSService):
             # Emit the TTS stopped frame
             yield TTSStoppedFrame()
 
-
+    @classmethod
+    def get_voices(cls, api_key: str):
+        raw = [
+            {"voice_id": "sarah", "name": "Sarah", "language": "en-GB", "gender": "female", "accent": "UK"},
+            {"voice_id": "theo", "name": "Theo", "language": "en-GB", "gender": "male", "accent": "UK"},
+            {"voice_id": "jack", "name": "Jack", "language": "en-US", "gender": "male", "accent": "US"},
+            {"voice_id": "megan", "name": "Megan", "language": "en-US", "gender": "female", "accent": "US"},
+        ]
+        return [
+            {
+                "name": v["name"],
+                "voice_id": v["voice_id"],
+                "description": None,
+                "gender": v["gender"],
+                "language": v["language"],
+                "sample_url": None,
+                "accent": v["accent"],
+            }
+            for v in raw
+        ]
+        
 def _get_endpoint_url(base_url: str, voice: str, sample_rate: int) -> str:
     """Format the TTS endpoint URL with voice, output format, and version params.
 
