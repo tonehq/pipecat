@@ -388,6 +388,7 @@ def _setup_webrtc_routes(
 
     @app.post("/start")
     async def rtvi_start(request: Request):
+        print("RTVI start request received")
         """Mimic Pipecat Cloud's /start endpoint."""
         # Parse the request body
         try:
@@ -657,6 +658,7 @@ def _setup_daily_routes(app: FastAPI, dialin_enabled: bool = False):
 
     @app.post("/start")
     async def start_agent(request: Request):
+        print("Daily start request received")
         """Handler for /start endpoints.
 
         Expects POST body like::
