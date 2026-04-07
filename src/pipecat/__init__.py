@@ -5,11 +5,17 @@
 #
 
 import sys
-from importlib.metadata import version as lib_version
+from importlib.metadata import PackageNotFoundError, version as lib_version
 
 from loguru import logger
 
-__version__ = lib_version("pipecat-ai")
+try:
+    __version__ = lib_version("tone-pipecat")
+except PackageNotFoundError:
+    try:
+        __version__ = lib_version("pipecat-ai")
+    except PackageNotFoundError:
+        __version__ = "0.0.0+unknown"
 
 logger.info(f"ᓚᘏᗢ Pipecat {__version__} (Python {sys.version}) ᓚᘏᗢ")
 
