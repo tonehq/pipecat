@@ -256,6 +256,4 @@ class NvidiaWebSocketService(WebsocketSTTService):
                     transcript=final_text, is_final=True, language=self._language
                 )
             elif msg_type == "error":
-                await self.push_error(
-                    error_msg=f"Nemotron STT error: {content.get('detail')}"
-                )
+                await self.push_error(error_msg=f"Nemotron STT error: {content.get('detail')}")
