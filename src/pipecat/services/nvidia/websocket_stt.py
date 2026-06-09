@@ -73,6 +73,7 @@ class NvidiaWebSocketService(WebsocketSTTService):
         url: str,
         sample_rate: Optional[int] = 16000,
         language: Language = Language.EN,
+        trace_id: Optional[str] = None,
         **kwargs,
     ):
         """Initialize the NVIDIA Nemotron websocket STT service.
@@ -82,12 +83,15 @@ class NvidiaWebSocketService(WebsocketSTTService):
                 ``ws://stt-host:8000/ws/asr`` (or ``wss://`` behind TLS).
             sample_rate: Audio sample rate in Hz. The server expects 16 kHz.
             language: Transcript language tag attached to emitted frames.
+            trace_id: Optional correlation id sent to the server as a
+                ``trace_id`` query param so its logs can be joined with ours.
             **kwargs: Additional arguments passed to the parent classes.
         """
         super().__init__(sample_rate=sample_rate, **kwargs)
 
         self._url = url
         self._language = language
+        self._trace_id = trace_id
         self.set_model_name("nvidia/nemotron-speech-streaming-en-0.6b")
 
         self._receive_task = None
@@ -177,8 +181,12 @@ class NvidiaWebSocketService(WebsocketSTTService):
             if self._websocket and self._websocket.state is State.OPEN:
                 return
 
-            logger.debug(f"{self} connecting to Nemotron WebSocket {self._url}")
-            self._websocket = await websocket_connect(self._url)
+            url = self._url
+            if self._trace_id:
+                sep = "&" if "?" in url else "?"
+                url = f"{url}{sep}trace_id={self._trace_id}"
+            logger.debug(f"{self} connecting to Nemotron WebSocket {url}")
+            self._websocket = await websocket_connect(url)
             self._last_partial = ""
             await self._call_event_handler("on_connected")
             logger.debug(f"{self} connected to Nemotron WebSocket")
