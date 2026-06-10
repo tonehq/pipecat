@@ -36,7 +36,10 @@ from pipecat.frames.frames import (
     InterimTranscriptionFrame,
     StartFrame,
     TranscriptionFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.stt_service import WebsocketSTTService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.time import time_now_iso8601
@@ -147,8 +150,6 @@ class NvidiaWebSocketService(WebsocketSTTService):
         Yields:
             None. Transcripts are pushed asynchronously from the receive task.
         """
-        await self.start_processing_metrics()
-
         if self._websocket and self._websocket.state is State.OPEN:
             try:
                 await self._websocket.send(audio)
@@ -156,6 +157,45 @@ class NvidiaWebSocketService(WebsocketSTTService):
                 logger.warning(f"{self} websocket closed while sending audio: {e}")
 
         yield None
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        """Drive per-utterance metrics from VAD events.
+
+        Nemotron's v1 server only emits ``final`` after ``eof`` (i.e. at
+        shutdown), so without this hook each utterance would never produce a
+        ``TranscriptionFrame`` and pipecat would never close the STT span,
+        TTFB metric, or processing-time metric. We synthesize the per-utterance
+        final from the latest ``partial`` on VAD stop.
+        """
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            await self.start_processing_metrics()
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            await self._finalize_utterance()
+
+    async def _finalize_utterance(self):
+        """Emit a synthetic final transcript from the latest partial on VAD stop."""
+        final_text = self._last_partial
+        self._last_partial = ""
+
+        if not final_text:
+            await self.stop_processing_metrics()
+            return
+
+        self.request_finalize()
+        self.confirm_finalize()
+        await self.push_frame(
+            TranscriptionFrame(
+                final_text,
+                self._user_id,
+                time_now_iso8601(),
+                self._language,
+            )
+        )
+        await self._handle_transcription(
+            transcript=final_text, is_final=True, language=self._language
+        )
 
     async def _connect(self):
         """Connect to the Nemotron server and start the receive task."""
@@ -191,6 +231,7 @@ class NvidiaWebSocketService(WebsocketSTTService):
             await self._call_event_handler("on_connected")
             logger.debug(f"{self} connected to Nemotron WebSocket")
         except Exception as e:
+            await self.stop_all_metrics()
             await self.push_error(error_msg=f"Unable to connect to Nemotron STT: {e}", exception=e)
             raise
 
@@ -264,4 +305,5 @@ class NvidiaWebSocketService(WebsocketSTTService):
                     transcript=final_text, is_final=True, language=self._language
                 )
             elif msg_type == "error":
+                await self.stop_all_metrics()
                 await self.push_error(error_msg=f"Nemotron STT error: {content.get('detail')}")
