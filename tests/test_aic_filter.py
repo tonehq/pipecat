@@ -5,91 +5,68 @@
 #
 
 import asyncio
+import time
 import unittest
+import warnings
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 
+# The create_vad_analyzer factory and AICVADAnalyzer constructor now emit
+# DeprecationWarnings of their own (covered by their dedicated test files).
+# Suppress here so this file's primary coverage stays quiet.
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    message=".*(AICVADAnalyzer|create_vad_analyzer) is deprecated.*",
+)
+
 # Check if aic_sdk is available
+aic_sdk: Any
 try:
     import aic_sdk
 
     HAS_AIC_SDK = True
 except ImportError:
+    aic_sdk = None
     HAS_AIC_SDK = False
 
 # Module path for patching
 AIC_FILTER_MODULE = "pipecat.audio.filters.aic_filter"
 
 
-class MockProcessor:
-    """A lightweight mock for AIC ProcessorAsync that mimics real behavior."""
-
-    def __init__(self):
-        self.processor_ctx = MockProcessorContext()
-        self.vad_ctx = MockVadContext()
-
-    def get_processor_context(self):
-        return self.processor_ctx
-
-    def get_vad_context(self):
-        return self.vad_ctx
-
-    async def process_async(self, audio_array):
-        # Return a copy of the input (simulating passthrough)
-        return audio_array.copy()
+def _model_manager_ref_count(manager, key: str) -> int:
+    """Test helper: return reference count for a cache key (reads internal cache)."""
+    with manager._lock:
+        entry = manager._cache.get(key)
+        return entry[1] if entry else 0
 
 
-class MockProcessorContext:
-    """A lightweight mock for AIC ProcessorContext."""
+from tests.aic_mocks import (  # noqa: E402
+    MockModel,
+    MockProcessorContext,
+)
+from tests.aic_mocks import (
+    MockProcessorAsync as MockProcessor,
+)
 
-    def __init__(self):
-        self.parameters_set: list[tuple] = []
-        self.reset_called = False
-        self._output_delay = 0
 
-    def get_output_delay(self):
-        return self._output_delay
+class UnsupportedEnhancementProcessorContext(MockProcessorContext):
+    """Processor context mock that rejects EnhancementLevel updates."""
+
+    def __init__(self, enhancement_parameter, error_type):
+        super().__init__()
+        self._enhancement_parameter = enhancement_parameter
+        self._error_type = error_type
+        self.enhancement_attempts = 0
 
     def set_parameter(self, param, value):
-        self.parameters_set.append((param, value))
-
-    def reset(self):
-        self.reset_called = True
-
-
-class MockVadContext:
-    """A lightweight mock for AIC VadContext."""
-
-    def __init__(self, speech_detected: bool = False):
-        self.speech_detected = speech_detected
-        self.parameters_set: list[tuple] = []
-
-    def is_speech_detected(self) -> bool:
-        return self.speech_detected
-
-    def set_parameter(self, param, value):
-        self.parameters_set.append((param, value))
-
-
-class MockModel:
-    """A lightweight mock for AIC Model."""
-
-    def __init__(self, model_id: str = "test-model"):
-        self._model_id = model_id
-        self._optimal_num_frames = 160
-        self._optimal_sample_rate = 16000
-
-    def get_optimal_num_frames(self, sample_rate: int):
-        """Return optimal number of frames for the given sample rate."""
-        return self._optimal_num_frames
-
-    def get_id(self):
-        return self._model_id
-
-    def get_optimal_sample_rate(self):
-        return self._optimal_sample_rate
+        if param == self._enhancement_parameter:
+            self.enhancement_attempts += 1
+            raise self._error_type("EnhancementLevel out of range")
+        super().set_parameter(param, value)
 
 
 @unittest.skipUnless(HAS_AIC_SDK, "aic-sdk not installed")
@@ -99,10 +76,11 @@ class TestAICFilter(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Import AICFilter after confirming aic_sdk is available."""
-        from pipecat.audio.filters.aic_filter import AICFilter
+        from pipecat.audio.filters.aic_filter import AICFilter, AICModelManager
         from pipecat.frames.frames import FilterEnableFrame
 
         cls.AICFilter = AICFilter
+        cls.AICModelManager = AICModelManager
         cls.FilterEnableFrame = FilterEnableFrame
 
     def setUp(self):
@@ -122,13 +100,13 @@ class TestAICFilter(unittest.IsolatedAsyncioTestCase):
 
     async def _start_filter_with_mocks(self, filter_instance, sample_rate=16000):
         """Start a filter with mocked SDK components."""
+        cache_key = "test-cache-key"
         with (
-            patch(f"{AIC_FILTER_MODULE}.Model") as mock_model_cls,
+            patch(f"{AIC_FILTER_MODULE}.AICModelManager") as mock_manager_cls,
             patch(f"{AIC_FILTER_MODULE}.ProcessorConfig") as mock_config_cls,
             patch(f"{AIC_FILTER_MODULE}.ProcessorAsync", return_value=self.mock_processor),
         ):
-            mock_model_cls.from_file.return_value = self.mock_model
-            mock_model_cls.download_async = AsyncMock(return_value="/tmp/model")
+            mock_manager_cls.acquire = AsyncMock(return_value=(self.mock_model, cache_key))
             mock_config_cls.optimal.return_value = MagicMock()
             await filter_instance.start(sample_rate)
 
@@ -148,6 +126,7 @@ class TestAICFilter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(filter_instance._license_key, "test-key")
         self.assertEqual(filter_instance._model_id, "test-model")
         self.assertIsNone(filter_instance._model_path)
+        self.assertIsNone(filter_instance._enhancement_level)
         self.assertFalse(filter_instance._bypass)
 
     async def test_initialization_with_model_path(self):
@@ -165,43 +144,73 @@ class TestAICFilter(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(filter_instance._model_download_dir, download_dir)
 
+    async def test_initialization_with_valid_enhancement_level(self):
+        """Test filter initialization with a valid enhancement_level."""
+        filter_instance = self._create_filter_with_mocks(enhancement_level=0.75)
+
+        self.assertEqual(filter_instance._enhancement_level, 0.75)
+
+    async def test_initialization_with_none_enhancement_level(self):
+        """Test filter initialization with enhancement_level set to None."""
+        filter_instance = self._create_filter_with_mocks(enhancement_level=None)
+
+        self.assertIsNone(filter_instance._enhancement_level)
+
+    async def test_initialization_invalid_enhancement_level_raises(self):
+        """Test initialization rejects enhancement_level outside 0.0..1.0."""
+        with patch(f"{AIC_FILTER_MODULE}.set_sdk_id"):
+            with self.assertRaises(ValueError) as context:
+                self.AICFilter(
+                    license_key="test-key",
+                    model_id="test-model",
+                    enhancement_level=1.5,
+                )
+        self.assertIn("enhancement_level", str(context.exception))
+
     async def test_start_with_model_path(self):
         """Test starting filter with a local model path."""
         model_path = Path("/tmp/test.aicmodel")
         filter_instance = self._create_filter_with_mocks(model_id=None, model_path=model_path)
 
         with (
-            patch(f"{AIC_FILTER_MODULE}.Model") as mock_model_cls,
+            patch(f"{AIC_FILTER_MODULE}.AICModelManager") as mock_manager_cls,
             patch(f"{AIC_FILTER_MODULE}.ProcessorConfig") as mock_config_cls,
             patch(f"{AIC_FILTER_MODULE}.ProcessorAsync", return_value=self.mock_processor),
         ):
-            mock_model_cls.from_file.return_value = self.mock_model
+            mock_manager_cls.acquire = AsyncMock(
+                return_value=(self.mock_model, "path:/tmp/test.aicmodel")
+            )
             mock_config_cls.optimal.return_value = MagicMock()
 
             await filter_instance.start(16000)
 
-            mock_model_cls.from_file.assert_called_once_with(str(model_path))
+            mock_manager_cls.acquire.assert_called_once()
+            call_kw = mock_manager_cls.acquire.call_args[1]
+            self.assertEqual(call_kw["model_path"], model_path)
+            self.assertIsNone(call_kw["model_id"])
             self.assertTrue(filter_instance._aic_ready)
             self.assertEqual(filter_instance._sample_rate, 16000)
             self.assertEqual(filter_instance._frames_per_block, 160)
 
     async def test_start_with_model_id_downloads(self):
-        """Test starting filter with model_id triggers download."""
+        """Test starting filter with model_id uses manager (download happens in manager)."""
         filter_instance = self._create_filter_with_mocks()
 
         with (
-            patch(f"{AIC_FILTER_MODULE}.Model") as mock_model_cls,
+            patch(f"{AIC_FILTER_MODULE}.AICModelManager") as mock_manager_cls,
             patch(f"{AIC_FILTER_MODULE}.ProcessorConfig") as mock_config_cls,
             patch(f"{AIC_FILTER_MODULE}.ProcessorAsync", return_value=self.mock_processor),
         ):
-            mock_model_cls.from_file.return_value = self.mock_model
-            mock_model_cls.download_async = AsyncMock(return_value="/tmp/model")
+            mock_manager_cls.acquire = AsyncMock(
+                return_value=(self.mock_model, "id:test-model:/custom/cache")
+            )
             mock_config_cls.optimal.return_value = MagicMock()
 
             await filter_instance.start(16000)
 
-            mock_model_cls.download_async.assert_called_once()
-            mock_model_cls.from_file.assert_called_once()
+            mock_manager_cls.acquire.assert_called_once()
+            call_kw = mock_manager_cls.acquire.call_args[1]
+            self.assertEqual(call_kw["model_id"], "test-model")
             self.assertTrue(filter_instance._aic_ready)
 
     async def test_start_creates_processor(self):
@@ -209,14 +218,13 @@ class TestAICFilter(unittest.IsolatedAsyncioTestCase):
         filter_instance = self._create_filter_with_mocks()
 
         with (
-            patch(f"{AIC_FILTER_MODULE}.Model") as mock_model_cls,
+            patch(f"{AIC_FILTER_MODULE}.AICModelManager") as mock_manager_cls,
             patch(f"{AIC_FILTER_MODULE}.ProcessorConfig") as mock_config_cls,
             patch(
                 f"{AIC_FILTER_MODULE}.ProcessorAsync", return_value=self.mock_processor
             ) as mock_processor_cls,
         ):
-            mock_model_cls.from_file.return_value = self.mock_model
-            mock_model_cls.download_async = AsyncMock(return_value="/tmp/model")
+            mock_manager_cls.acquire = AsyncMock(return_value=(self.mock_model, "test-cache-key"))
             mock_config_cls.optimal.return_value = MagicMock()
 
             await filter_instance.start(16000)
@@ -231,7 +239,6 @@ class TestAICFilter(unittest.IsolatedAsyncioTestCase):
         filter_instance = self._create_filter_with_mocks()
         await self._start_filter_with_mocks(filter_instance)
 
-        # Check that bypass was set to 0.0 (enabled)
         bypass_params = [
             (p, v)
             for p, v in self.mock_processor.processor_ctx.parameters_set
@@ -240,18 +247,66 @@ class TestAICFilter(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(bypass_params) > 0)
         self.assertEqual(bypass_params[-1][1], 0.0)
 
-    async def test_stop_cleans_up_resources(self):
-        """Test that stop properly cleans up resources."""
-        filter_instance = self._create_filter_with_mocks()
+    async def test_start_applies_enhancement_level_when_supported(self):
+        """Test that start applies enhancement_level when supported by model."""
+        filter_instance = self._create_filter_with_mocks(enhancement_level=0.65)
         await self._start_filter_with_mocks(filter_instance)
 
-        await filter_instance.stop()
+        enhancement_params = [
+            (p, v)
+            for p, v in self.mock_processor.processor_ctx.parameters_set
+            if p == aic_sdk.ProcessorParameter.EnhancementLevel
+        ]
+        self.assertTrue(len(enhancement_params) > 0)
+        self.assertEqual(enhancement_params[-1][1], 0.65)
 
+    async def test_start_ignores_enhancement_level_when_unsupported(self):
+        """Test unsupported enhancement_level logs warning and keeps filter ready."""
+        filter_instance = self._create_filter_with_mocks(enhancement_level=0.65)
+
+        with patch(f"{AIC_FILTER_MODULE}.ParameterOutOfRangeError", ValueError):
+            unsupported_ctx = UnsupportedEnhancementProcessorContext(
+                aic_sdk.ProcessorParameter.EnhancementLevel, ValueError
+            )
+            self.mock_processor.processor_ctx = unsupported_ctx
+            await self._start_filter_with_mocks(filter_instance)
+
+        self.assertTrue(filter_instance._aic_ready)
+        self.assertIsNone(filter_instance._enhancement_level)
+        self.assertEqual(unsupported_ctx.enhancement_attempts, 1)
+
+    async def test_start_does_not_set_enhancement_level_when_none(self):
+        """Test start does not attempt enhancement_level when not configured."""
+        filter_instance = self._create_filter_with_mocks(enhancement_level=None)
+        with patch(f"{AIC_FILTER_MODULE}.logger.debug") as mock_debug:
+            await self._start_filter_with_mocks(filter_instance)
+
+        enhancement_params = [
+            (p, v)
+            for p, v in self.mock_processor.processor_ctx.parameters_set
+            if p == aic_sdk.ProcessorParameter.EnhancementLevel
+        ]
+        self.assertEqual(enhancement_params, [])
+        self.assertTrue(
+            any("default behavior" in str(call.args[0]) for call in mock_debug.call_args_list)
+        )
+
+    async def test_stop_cleans_up_resources(self):
+        """Test that stop properly cleans up resources and releases model reference."""
+        filter_instance = self._create_filter_with_mocks()
+        await self._start_filter_with_mocks(filter_instance)
+        cache_key = filter_instance._model_cache_key
+
+        with patch(f"{AIC_FILTER_MODULE}.AICModelManager.release") as mock_release:
+            await filter_instance.stop()
+
+        mock_release.assert_called_once_with(cache_key)
         self.assertTrue(self.mock_processor.processor_ctx.reset_called)
         self.assertIsNone(filter_instance._processor)
         self.assertIsNone(filter_instance._processor_ctx)
         self.assertIsNone(filter_instance._vad_ctx)
         self.assertIsNone(filter_instance._model)
+        self.assertIsNone(filter_instance._model_cache_key)
         self.assertFalse(filter_instance._aic_ready)
 
     async def test_stop_without_start(self):
@@ -261,26 +316,204 @@ class TestAICFilter(unittest.IsolatedAsyncioTestCase):
         # Should not raise
         await filter_instance.stop()
 
-    async def test_process_frame_enable(self):
-        """Test processing FilterEnableFrame to enable filtering."""
+    async def test_model_manager_reference_count(self):
+        """Test that AICModelManager reference count increments and decrements correctly."""
+        model_path = Path("/tmp/refcount-test.aicmodel")
+        mock_model = MockModel()
+        manager = self.AICModelManager
+
+        with patch(f"{AIC_FILTER_MODULE}.Model") as mock_model_cls:
+            mock_model_cls.from_file.return_value = mock_model
+
+            # Acquire first reference
+            model1, key = await manager.acquire(model_path=model_path)
+            self.assertEqual(model1, mock_model)
+            self.assertEqual(_model_manager_ref_count(manager, key), 1)
+
+            # Acquire second reference (same key, cached)
+            model2, key2 = await manager.acquire(model_path=model_path)
+            self.assertIs(model2, model1)
+            self.assertEqual(key2, key)
+            self.assertEqual(_model_manager_ref_count(manager, key), 2)
+
+            # Release one reference
+            manager.release(key)
+            self.assertEqual(_model_manager_ref_count(manager, key), 1)
+
+            # Release last reference (model evicted from cache)
+            manager.release(key)
+            self.assertEqual(_model_manager_ref_count(manager, key), 0)
+
+    async def test_model_manager_concurrent_load_deduplication(self):
+        """Test that concurrent acquire calls for the same key share a single load task."""
+        model_path = Path("/tmp/concurrent-load-test.aicmodel")
+        mock_model = MockModel()
+        manager = self.AICModelManager
+        load_count = 0
+
+        def from_file_once(path):
+            nonlocal load_count
+            load_count += 1
+            time.sleep(0.02)  # yield so other acquire callers can hit _loading and await same task
+            return mock_model
+
+        with patch(f"{AIC_FILTER_MODULE}.Model") as mock_model_cls:
+            mock_model_cls.from_file.side_effect = from_file_once
+
+            # Start several acquire calls concurrently before any completes
+            results = await asyncio.gather(
+                manager.acquire(model_path=model_path),
+                manager.acquire(model_path=model_path),
+                manager.acquire(model_path=model_path),
+            )
+
+            self.assertEqual(
+                load_count, 1, "Model.from_file should be called once for concurrent callers"
+            )
+            model1, key1 = results[0]
+            model2, key2 = results[1]
+            model3, key3 = results[2]
+            self.assertIs(model1, mock_model)
+            self.assertIs(model2, mock_model)
+            self.assertIs(model3, mock_model)
+            self.assertEqual(key1, key2)
+            self.assertEqual(key2, key3)
+            self.assertEqual(_model_manager_ref_count(manager, key1), 3)
+
+            # Release all references
+            manager.release(key1)
+            manager.release(key1)
+            manager.release(key1)
+            self.assertEqual(_model_manager_ref_count(manager, key1), 0)
+
+    async def test_load_model_from_file_invalid_args_raises(self):
+        """Test _load_model_from_file defensive else: raises ValueError."""
+        manager = self.AICModelManager
+        with self.assertRaises(ValueError) as ctx:
+            await manager._load_model_from_file(
+                "key",
+                model_path=None,
+                model_id=None,
+                model_download_dir=None,
+            )
+        self.assertIn("Unexpected", str(ctx.exception))
+
+    async def test_model_manager_acquire_by_model_id_hits_download_path(self):
+        """Test acquire with model_id runs download path in _load_model_from_file."""
+        model_id = "test-model-id"
+        model_download_dir = Path("/tmp/aic-downloads")
+        mock_model = MockModel()
+        manager = self.AICModelManager
+
+        with patch(f"{AIC_FILTER_MODULE}.Model") as mock_model_cls:
+            mock_model_cls.download_async = AsyncMock(
+                return_value="/tmp/aic-downloads/model.aicmodel"
+            )
+            mock_model_cls.from_file.return_value = mock_model
+
+            model, key = await manager.acquire(
+                model_id=model_id,
+                model_download_dir=model_download_dir,
+            )
+
+            mock_model_cls.download_async.assert_called_once()
+            mock_model_cls.from_file.assert_called_once_with("/tmp/aic-downloads/model.aicmodel")
+            self.assertIs(model, mock_model)
+            self.assertEqual(_model_manager_ref_count(manager, key), 1)
+            manager.release(key)
+
+    def test_get_cache_key_invalid_raises(self):
+        """Test _get_cache_key raises ValueError for invalid args."""
+        with self.assertRaises(ValueError) as ctx:
+            self.AICModelManager._get_cache_key(model_path=None, model_id=None)
+        self.assertIn("model_path", str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx2:
+            self.AICModelManager._get_cache_key(
+                model_path=None,
+                model_id="x",
+                model_download_dir=None,
+            )
+        self.assertIn("model_download_dir", str(ctx2.exception))
+
+    async def test_start_processor_init_failure(self):
+        """Test start() when ProcessorAsync raises: exception logged, _aic_ready False."""
         filter_instance = self._create_filter_with_mocks()
+
+        with (
+            patch(f"{AIC_FILTER_MODULE}.AICModelManager") as mock_manager_cls,
+            patch(f"{AIC_FILTER_MODULE}.ProcessorConfig") as mock_config_cls,
+            patch(
+                f"{AIC_FILTER_MODULE}.ProcessorAsync",
+                side_effect=RuntimeError("SDK init failed"),
+            ),
+        ):
+            mock_manager_cls.acquire = AsyncMock(return_value=(self.mock_model, "test-key"))
+            mock_config_cls.optimal.return_value = MagicMock()
+
+            await filter_instance.start(16000)
+
+        self.assertIsNone(filter_instance._processor)
+        self.assertFalse(filter_instance._aic_ready)
+
+    async def test_start_skips_unsupported_enhancement_level_after_first_attempt(self):
+        """Test unsupported enhancement_level is attempted once and then skipped."""
+        filter_instance = self._create_filter_with_mocks(enhancement_level=0.9)
+
+        with patch(f"{AIC_FILTER_MODULE}.ParameterOutOfRangeError", ValueError):
+            unsupported_ctx = UnsupportedEnhancementProcessorContext(
+                aic_sdk.ProcessorParameter.EnhancementLevel, ValueError
+            )
+            self.mock_processor.processor_ctx = unsupported_ctx
+
+            await self._start_filter_with_mocks(filter_instance)
+            await filter_instance.stop()
+            await self._start_filter_with_mocks(filter_instance)
+
+        self.assertEqual(unsupported_ctx.enhancement_attempts, 1)
+
+    async def test_process_frame_disable_sets_bypass(self):
+        """Test disable frame toggles bypass."""
+        filter_instance = self._create_filter_with_mocks(enhancement_level=0.7)
         await self._start_filter_with_mocks(filter_instance)
-        filter_instance._bypass = True
+        await filter_instance.process_frame(self.FilterEnableFrame(enable=False))
 
-        enable_frame = self.FilterEnableFrame(enable=True)
-        await filter_instance.process_frame(enable_frame)
-
-        self.assertFalse(filter_instance._bypass)
-
-    async def test_process_frame_disable(self):
-        """Test processing FilterEnableFrame to disable filtering."""
-        filter_instance = self._create_filter_with_mocks()
-        await self._start_filter_with_mocks(filter_instance)
-
-        disable_frame = self.FilterEnableFrame(enable=False)
-        await filter_instance.process_frame(disable_frame)
+        enhancement_params = [
+            (p, v)
+            for p, v in self.mock_processor.processor_ctx.parameters_set
+            if p == aic_sdk.ProcessorParameter.EnhancementLevel
+        ]
+        bypass_params = [
+            (p, v)
+            for p, v in self.mock_processor.processor_ctx.parameters_set
+            if p == aic_sdk.ProcessorParameter.Bypass
+        ]
 
         self.assertTrue(filter_instance._bypass)
+        self.assertEqual(enhancement_params[-1][1], 0.7)
+        self.assertEqual(bypass_params[-1][1], 1.0)
+
+    async def test_process_frame_enable_restores_configured_enhancement(self):
+        """Test enable frame restores configured enhancement level."""
+        filter_instance = self._create_filter_with_mocks(enhancement_level=0.7)
+        await self._start_filter_with_mocks(filter_instance)
+
+        await filter_instance.process_frame(self.FilterEnableFrame(enable=False))
+        await filter_instance.process_frame(self.FilterEnableFrame(enable=True))
+
+        enhancement_params = [
+            (p, v)
+            for p, v in self.mock_processor.processor_ctx.parameters_set
+            if p == aic_sdk.ProcessorParameter.EnhancementLevel
+        ]
+        bypass_params = [
+            (p, v)
+            for p, v in self.mock_processor.processor_ctx.parameters_set
+            if p == aic_sdk.ProcessorParameter.Bypass
+        ]
+        self.assertFalse(filter_instance._bypass)
+        self.assertEqual(enhancement_params[-1][1], 0.7)
+        self.assertEqual(bypass_params[-1][1], 0.0)
 
     async def test_filter_when_not_ready(self):
         """Test that filter returns audio unchanged when not ready."""
@@ -442,6 +675,83 @@ class TestAICFilter(unittest.IsolatedAsyncioTestCase):
         for result in results:
             self.assertIsInstance(result, bytes)
 
+    async def test_concurrent_filter_no_buffer_resize_error(self):
+        """Regression: concurrent filter() must not raise BufferError.
+
+        When process_async yields to the event loop, a second filter() call
+        runs and calls _audio_buffer.extend().  If the first call still holds
+        a memoryview on the bytearray, extend() raises:
+
+            BufferError: Existing exports of data: object cannot be re-sized
+
+        The fix snapshots the needed data into immutable bytes and trims the
+        buffer *before* any await, so no memoryview is held across yield
+        points.
+        """
+        filter_instance = self._create_filter_with_mocks()
+
+        # Make process_async yield to the event loop so concurrent filter()
+        # calls can interleave and attempt _audio_buffer.extend().
+        async def yielding_process_async(audio_array):
+            await asyncio.sleep(0)
+            return audio_array.copy()
+
+        self.mock_processor.process_async = yielding_process_async
+        await self._start_filter_with_mocks(filter_instance)
+
+        samples = np.random.randint(-32768, 32767, size=160, dtype=np.int16)
+        input_audio = samples.tobytes()
+
+        async def filter_audio():
+            return await filter_instance.filter(input_audio)
+
+        # 20 concurrent calls to reliably trigger the interleaving.
+        tasks = [filter_audio() for _ in range(20)]
+        results = await asyncio.gather(*tasks)
+
+        for result in results:
+            self.assertIsInstance(result, bytes)
+
+    async def test_stop_during_filter_no_buffer_resize_error(self):
+        """Regression: stop() during filter() must not raise BufferError.
+
+        When filter() holds a memoryview on _audio_buffer across an await
+        (process_async), a concurrent stop() that calls
+        _audio_buffer.clear() raises:
+
+            BufferError: Existing exports of data: object cannot be re-sized
+
+        The fix removes the memoryview by snapshotting data into immutable
+        bytes before any await.
+        """
+        filter_instance = self._create_filter_with_mocks()
+
+        # Gate so stop() waits until filter() is inside process_async.
+        processing_started = asyncio.Event()
+
+        async def yielding_process_async(audio_array):
+            processing_started.set()
+            await asyncio.sleep(0)  # yield — stop() runs here
+            return audio_array.copy()
+
+        self.mock_processor.process_async = yielding_process_async
+        await self._start_filter_with_mocks(filter_instance)
+
+        # Exactly one complete frame so the loop runs once.
+        samples = np.random.randint(-32768, 32767, size=160, dtype=np.int16)
+        input_audio = samples.tobytes()
+
+        async def stop_after_filter_enters_process_async():
+            await processing_started.wait()
+            await filter_instance.stop()
+
+        # filter() enters process_async → yields → stop() calls clear()
+        filter_result, _ = await asyncio.gather(
+            filter_instance.filter(input_audio),
+            stop_after_filter_enters_process_async(),
+        )
+        self.assertIsInstance(filter_result, bytes)
+
     async def test_buffer_cleared_on_stop(self):
         """Test that audio buffer is cleared when stopping."""
         filter_instance = self._create_filter_with_mocks()
@@ -465,6 +775,23 @@ class TestAICFilter(unittest.IsolatedAsyncioTestCase):
             self.AICFilter(license_key="test-key", model_id="test-model")
 
             mock_set_sdk_id.assert_called_once_with(6)
+
+    async def test_apply_bypass_noop_without_processor_ctx(self):
+        """_apply_bypass returns early when the processor context isn't initialized."""
+        filter_instance = self._create_filter_with_mocks()
+        self.assertIsNone(filter_instance._processor_ctx)
+        # Must not raise.
+        filter_instance._apply_bypass()
+
+    async def test_filter_enable_frame_swallows_set_parameter_exception(self):
+        """process_frame logs and continues if _apply_bypass / _apply_enhancement_level raises."""
+        filter_instance = self._create_filter_with_mocks(enhancement_level=0.5)
+        await self._start_filter_with_mocks(filter_instance)
+        # Force the bypass path to raise; process_frame must swallow it.
+        with patch.object(filter_instance, "_apply_bypass", side_effect=RuntimeError("boom")):
+            await filter_instance.process_frame(self.FilterEnableFrame(enable=True))
+        # Filter state still updated to reflect the requested enable.
+        self.assertFalse(filter_instance._bypass)
 
 
 if __name__ == "__main__":

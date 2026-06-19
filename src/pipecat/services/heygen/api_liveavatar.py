@@ -9,7 +9,8 @@
 API to communicate with LiveAvatar Streaming API.
 """
 
-from typing import Any, Dict, Optional
+from enum import StrEnum
+from typing import Any
 
 import aiohttp
 from loguru import logger
@@ -27,8 +28,8 @@ class AvatarPersona(BaseModel):
         language (str): Language code for the avatar (default: "en").
     """
 
-    voice_id: Optional[str] = None
-    context_id: Optional[str] = None
+    voice_id: str | None = None
+    context_id: str | None = None
     language: str = "en"
 
 
@@ -46,19 +47,47 @@ class CustomSDKLiveKitConfig(BaseModel):
     livekit_client_token: str
 
 
+class VideoEncoding(StrEnum):
+    """Enum representing the video encoding."""
+
+    H264 = "H264"
+    VP8 = "VP8"
+
+
+class VideoQuality(StrEnum):
+    """Enum representing different avatar quality levels."""
+
+    low = "low"
+    medium = "medium"
+    high = "high"
+    very_high = "very_high"
+
+
+class VideoSettings(BaseModel):
+    """Video encoding settings for session configuration."""
+
+    encoding: VideoEncoding
+    quality: VideoQuality = VideoQuality.high
+
+
 class LiveAvatarNewSessionRequest(BaseModel):
     """Request model for creating a LiveAvatar session token.
 
     Parameters:
-        mode (str): Session mode (default: "CUSTOM").
+        mode (str): Session mode (default: "LITE").
         avatar_id (str): Unique identifier for the avatar.
+        video_settings (VideoSettings): Video encoding settings.
+        is_sandbox (bool): Enable sandbox mode (default: False).
         avatar_persona (AvatarPersona): Avatar persona configuration.
+        livekit_config (CustomSDKLiveKitConfig): Custom LiveKit configuration.
     """
 
-    mode: str = "CUSTOM"
+    mode: str = "LITE"
     avatar_id: str
-    avatar_persona: Optional[AvatarPersona] = None
-    livekit_config: Optional[CustomSDKLiveKitConfig] = None
+    video_settings: VideoSettings | None = VideoSettings(encoding=VideoEncoding.VP8)
+    is_sandbox: bool | None = False
+    avatar_persona: AvatarPersona | None = None
+    livekit_config: CustomSDKLiveKitConfig | None = None
 
 
 class SessionTokenData(BaseModel):
@@ -157,8 +186,8 @@ class LiveAvatarApi(BaseAvatarApi):
         self,
         method: str,
         path: str,
-        params: Optional[Dict[str, Any]] = None,
-        bearer_token: Optional[str] = None,
+        params: dict[str, Any] | None = None,
+        bearer_token: str | None = None,
     ) -> Any:
         """Make a request to the LiveAvatar API.
 
@@ -219,7 +248,7 @@ class LiveAvatarApi(BaseAvatarApi):
             Session token information.
         """
         params: dict[str, Any] = {
-            "mode": request_data.mode,
+            "mode": request_data.mode if request_data.mode is not None else "LITE",
             "avatar_id": request_data.avatar_id,
         }
 
@@ -234,6 +263,27 @@ class LiveAvatarApi(BaseAvatarApi):
             avatar_persona = {k: v for k, v in avatar_persona.items() if v is not None}
             params["avatar_persona"] = avatar_persona
 
+        if request_data.is_sandbox is not None:
+            params["is_sandbox"] = request_data.is_sandbox
+
+        if request_data.video_settings is not None:
+            video_settings = {
+                "encoding": request_data.video_settings.encoding.value,
+                "quality": request_data.video_settings.quality.value,
+            }
+            params["video_settings"] = video_settings
+        else:
+            # Fall back to VP8 encoding if video_settings is not provided
+            params["video_settings"] = {"encoding": VideoEncoding.VP8.value}
+
+        if request_data.livekit_config is not None:
+            params["livekit_config"] = {
+                "livekit_url": request_data.livekit_config.livekit_url,
+                "livekit_room": request_data.livekit_config.livekit_room,
+                "livekit_client_token": request_data.livekit_config.livekit_client_token,
+            }
+
+        logger.debug(f"Creating LiveAvatar session token with params: {params}")
         response = await self._request("POST", "/sessions/token", params)
         logger.debug(f"LiveAvatar session token created")
 

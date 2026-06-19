@@ -7,20 +7,21 @@
 """Frame processor metrics collection and reporting."""
 
 import time
-from typing import Optional
 
 from loguru import logger
 
+from pipecat.audio.utils import detect_speech_onset
 from pipecat.frames.frames import MetricsFrame
 from pipecat.metrics.metrics import (
     LLMTokenUsage,
     LLMUsageMetricsData,
     MetricsData,
     ProcessingMetricsData,
+    TextAggregationMetricsData,
+    TTFAMetricsData,
     TTFBMetricsData,
     TTSUsageMetricsData,
 )
-from pipecat.utils.asyncio.task_manager import BaseTaskManager
 from pipecat.utils.base_object import BaseObject
 
 
@@ -29,9 +30,14 @@ class FrameProcessorMetrics(BaseObject):
 
     Provides comprehensive metrics tracking for frame processing operations,
     including timing measurements, resource usage, and performance analytics.
-    Supports TTFB tracking, processing duration metrics, and usage statistics
-    for LLM and TTS operations.
+    Supports TTFB tracking, TTFA tracking, processing duration metrics, and
+    usage statistics for LLM and TTS operations.
     """
+
+    # Cap on buffered audio while waiting for a TTFA speech onset, so a response
+    # that is all silence (or never becomes audible) can't grow the buffer without
+    # bound.
+    _TTFA_MAX_BUFFER_SECONDS = 3.0
 
     def __init__(self):
         """Initialize the frame processor metrics collector.
@@ -40,35 +46,19 @@ class FrameProcessorMetrics(BaseObject):
         processing times, and usage statistics.
         """
         super().__init__()
-        self._task_manager = None
         self._start_ttfb_time = 0
         self._start_processing_time = 0
+        self._start_text_aggregation_time = 0
         self._last_ttfb_time = 0
         self._should_report_ttfb = True
-
-    async def setup(self, task_manager: BaseTaskManager):
-        """Set up the metrics collector with a task manager.
-
-        Args:
-            task_manager: The task manager for handling async operations.
-        """
-        self._task_manager = task_manager
-
-    async def cleanup(self):
-        """Clean up metrics collection resources."""
-        await super().cleanup()
+        # TTFA (time-to-first-audio) state. TTFA extends TTFB: scanning for the
+        # first audible sample begins when TTFB stops (see stop_ttfb_metrics).
+        # Audio is buffered across chunks until a sustained onset is confirmed.
+        self._ttfa_active = False
+        self._ttfa_buffer = b""
 
     @property
-    def task_manager(self) -> BaseTaskManager:
-        """Get the associated task manager.
-
-        Returns:
-            The task manager instance for async operations.
-        """
-        return self._task_manager
-
-    @property
-    def ttfb(self) -> Optional[float]:
+    def ttfb(self) -> float | None:
         """Get the current TTFB value in seconds.
 
         Returns:
@@ -107,19 +97,27 @@ class FrameProcessorMetrics(BaseObject):
         """
         self._core_metrics_data = MetricsData(processor=name)
 
-    async def start_ttfb_metrics(self, report_only_initial_ttfb):
+    async def start_ttfb_metrics(
+        self, *, start_time: float | None = None, report_only_initial_ttfb: bool
+    ):
         """Start measuring time-to-first-byte (TTFB).
 
         Args:
+            start_time: Optional timestamp to use as the start time. If None,
+                uses the current time.
             report_only_initial_ttfb: Whether to report only the first TTFB measurement.
         """
         if self._should_report_ttfb:
-            self._start_ttfb_time = time.time()
+            self._start_ttfb_time = start_time or time.time()
             self._last_ttfb_time = 0
             self._should_report_ttfb = not report_only_initial_ttfb
 
-    async def stop_ttfb_metrics(self):
+    async def stop_ttfb_metrics(self, *, end_time: float | None = None):
         """Stop TTFB measurement and generate metrics frame.
+
+        Args:
+            end_time: Optional timestamp to use as the end time. If None, uses
+                the current time.
 
         Returns:
             MetricsFrame containing TTFB data, or None if not measuring.
@@ -127,20 +125,83 @@ class FrameProcessorMetrics(BaseObject):
         if self._start_ttfb_time == 0:
             return None
 
-        self._last_ttfb_time = time.time() - self._start_ttfb_time
-        logger.debug(f"{self._processor_name()} TTFB: {self._last_ttfb_time}")
+        end_time = end_time or time.time()
+
+        self._last_ttfb_time = end_time - self._start_ttfb_time
+        logger.debug(f"{self._processor_name()} TTFB: {self._last_ttfb_time:.3f}s")
         ttfb = TTFBMetricsData(
             processor=self._processor_name(), value=self._last_ttfb_time, model=self._model_name()
         )
         self._start_ttfb_time = 0
+        # The first byte has arrived; begin scanning leading silence so TTFA can
+        # be reported as TTFB plus the silence duration (see process_ttfa_metrics).
+        self._ttfa_active = True
+        self._ttfa_buffer = b""
         return MetricsFrame(data=[ttfb])
 
-    async def start_processing_metrics(self):
-        """Start measuring processing time."""
-        self._start_processing_time = time.time()
+    async def process_ttfa_metrics(self, *, audio: bytes, sample_rate: int, num_channels: int):
+        """Scan buffered audio for speech onset and report TTFA.
 
-    async def stop_processing_metrics(self):
+        TTFA extends TTFB: once :meth:`stop_ttfb_metrics` records the first byte,
+        audio is buffered across chunks (the leading silence may span several,
+        and onset confirmation needs a little audio past it) and scanned for a
+        sustained speech onset. When found, TTFB plus the leading-silence
+        duration is emitted and measuring stops until the next response.
+
+        Args:
+            audio: Raw PCM audio bytes (16-bit signed integers).
+            sample_rate: Sample rate of the audio in Hz.
+            num_channels: Number of interleaved audio channels.
+
+        Returns:
+            MetricsFrame containing TTFA data once onset is confirmed, otherwise
+            None.
+        """
+        if not self._ttfa_active or sample_rate <= 0:
+            return None
+
+        self._ttfa_buffer += audio
+        onset = detect_speech_onset(self._ttfa_buffer, sample_rate, num_channels)
+        if onset is None:
+            # No confirmed onset yet. Bound memory against pathologically long
+            # (or never-arriving) silence by giving up past a sane limit.
+            max_bytes = int(self._TTFA_MAX_BUFFER_SECONDS * sample_rate * max(num_channels, 1) * 2)
+            if len(self._ttfa_buffer) >= max_bytes:
+                logger.debug(
+                    f"{self._processor_name()} TTFA: no onset within "
+                    f"{self._TTFA_MAX_BUFFER_SECONDS:.0f}s of audio; not reporting"
+                )
+                self._ttfa_active = False
+                self._ttfa_buffer = b""
+            return None
+
+        silence_duration = onset / sample_rate
+        value = self._last_ttfb_time + silence_duration
+        logger.debug(
+            f"{self._processor_name()} TTFA: {value:.3f}s ({silence_duration:.3f}s leading silence)"
+        )
+        ttfa = TTFAMetricsData(
+            processor=self._processor_name(), value=value, model=self._model_name()
+        )
+        self._ttfa_active = False
+        self._ttfa_buffer = b""
+        return MetricsFrame(data=[ttfa])
+
+    async def start_processing_metrics(self, *, start_time: float | None = None):
+        """Start measuring processing time.
+
+        Args:
+            start_time: Optional timestamp to use as the start time. If None,
+                uses the current time.
+        """
+        self._start_processing_time = start_time or time.time()
+
+    async def stop_processing_metrics(self, *, end_time: float | None = None):
         """Stop processing time measurement and generate metrics frame.
+
+        Args:
+            end_time: Optional timestamp to use as the end time. If None, uses
+                the current time.
 
         Returns:
             MetricsFrame containing processing duration data, or None if not measuring.
@@ -148,8 +209,10 @@ class FrameProcessorMetrics(BaseObject):
         if self._start_processing_time == 0:
             return None
 
-        value = time.time() - self._start_processing_time
-        logger.debug(f"{self._processor_name()} processing time: {value}")
+        end_time = end_time or time.time()
+
+        value = end_time - self._start_processing_time
+        logger.debug(f"{self._processor_name()} processing time: {value:.3f}s")
         processing = ProcessingMetricsData(
             processor=self._processor_name(), value=value, model=self._model_name()
         )
@@ -190,3 +253,24 @@ class FrameProcessorMetrics(BaseObject):
         )
         logger.debug(f"{self._processor_name()} usage characters: {characters.value}")
         return MetricsFrame(data=[characters])
+
+    async def start_text_aggregation_metrics(self):
+        """Start measuring text aggregation time (first token to first sentence)."""
+        self._start_text_aggregation_time = time.time()
+
+    async def stop_text_aggregation_metrics(self):
+        """Stop text aggregation measurement and generate metrics frame.
+
+        Returns:
+            MetricsFrame containing text aggregation time, or None if not measuring.
+        """
+        if self._start_text_aggregation_time == 0:
+            return None
+
+        value = time.time() - self._start_text_aggregation_time
+        logger.debug(f"{self._processor_name()} text aggregation time: {value}")
+        aggregation = TextAggregationMetricsData(
+            processor=self._processor_name(), value=value, model=self._model_name()
+        )
+        self._start_text_aggregation_time = 0
+        return MetricsFrame(data=[aggregation])

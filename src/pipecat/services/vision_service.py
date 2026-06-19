@@ -12,11 +12,12 @@ visual content.
 """
 
 from abc import abstractmethod
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from pipecat.frames.frames import Frame, UserImageRawFrame
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.ai_service import AIService
+from pipecat.services.settings import VisionSettings
 
 
 class VisionService(AIService):
@@ -27,13 +28,20 @@ class VisionService(AIService):
     with the AI service infrastructure for metrics and lifecycle management.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, *, settings: VisionSettings | None = None, **kwargs):
         """Initialize the vision service.
 
         Args:
+            settings: The runtime-updatable settings for the vision service.
             **kwargs: Additional arguments passed to the parent AIService.
         """
-        super().__init__(**kwargs)
+        super().__init__(
+            settings=settings
+            # Here in case subclass doesn't implement more specific settings
+            # (which hopefully should be rare)
+            or VisionSettings(),
+            **kwargs,
+        )
         self._describe_text = None
 
     @abstractmethod
@@ -51,7 +59,8 @@ class VisionService(AIService):
             Frame: Frames containing the vision analysis results, typically TextFrame
             objects with descriptions or answers.
         """
-        pass
+        raise NotImplementedError
+        yield  # pragma: no cover
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process frames, handling vision image frames for analysis.
