@@ -12,8 +12,7 @@ for logging, debugging, analytics, and monitoring pipeline behavior.
 """
 
 from dataclasses import dataclass
-
-from typing_extensions import TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from pipecat.frames.frames import Frame
 from pipecat.utils.base_object import BaseObject
@@ -98,5 +97,13 @@ class BaseObserver(BaseObject):
 
         Args:
             data: The event data containing details about the frame transfer.
+        """
+        pass
+
+    async def on_pipeline_started(self):
+        """Called when the pipeline has fully started.
+
+        Fired after the ``StartFrame`` has been processed by all processors
+        in the pipeline, including nested ``ParallelPipeline`` branches.
         """
         pass

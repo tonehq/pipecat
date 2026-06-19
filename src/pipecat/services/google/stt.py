@@ -15,13 +15,16 @@ import asyncio
 import json
 import os
 import time
+import warnings
+from dataclasses import dataclass, field
 
 from pipecat.utils.tracing.service_decorators import traced_stt
 
 # Suppress gRPC fork warnings
 os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "false"
 
-from typing import AsyncGenerator, List, Optional, Union
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
@@ -34,8 +37,11 @@ from pipecat.frames.frames import (
     StartFrame,
     TranscriptionFrame,
 )
+from pipecat.services.settings import NOT_GIVEN, STTSettings, _NotGiven, assert_given
+from pipecat.services.stt_latency import GOOGLE_TTFS_P99
 from pipecat.services.stt_service import STTService
 from pipecat.transcriptions.language import Language, resolve_language
+from pipecat.utils.deprecation import deprecated
 from pipecat.utils.time import time_now_iso8601
 
 try:
@@ -50,19 +56,22 @@ try:
 except ModuleNotFoundError as e:
     logger.error(f"Exception: {e}")
     logger.error(
-        "In order to use Google AI, you need to `pip install pipecat-ai[google]`. Also, set `GOOGLE_APPLICATION_CREDENTIALS` environment variable."
+        'In order to use Google AI, you need to `uv add "pipecat-ai[google]"`. Also, set `GOOGLE_APPLICATION_CREDENTIALS` environment variable.'
     )
-    raise Exception(f"Missing module: {e}")
+    raise ImportError(f"Missing module: {e}") from e
 
 
-def language_to_google_stt_language(language: Language) -> Optional[str]:
+def language_to_google_stt_language(language: Language) -> str:
     """Maps Language enum to Google Speech-to-Text V2 language codes.
 
     Args:
         language: Language enum value.
 
     Returns:
-        Optional[str]: Google STT language code or None if not supported.
+        The corresponding Google STT language code. If ``language`` is not
+        in the verified mapping, falls back to the full language code string
+        and logs a warning (via
+        ``resolve_language(..., use_base_code=False)``).
     """
     LANGUAGE_MAP = {
         # Afrikaans
@@ -354,6 +363,48 @@ def language_to_google_stt_language(language: Language) -> Optional[str]:
     return resolve_language(language, LANGUAGE_MAP, use_base_code=False)
 
 
+@dataclass
+class GoogleSTTSettings(STTSettings):
+    """Settings for GoogleSTTService.
+
+    Parameters:
+        languages: List of ``Language`` enums for recognition
+            (e.g. ``[Language.EN_US]``). Preferred over ``language_codes``.
+        language_codes: List of Google STT language code strings
+            (e.g. ``["en-US"]``).
+
+            .. deprecated:: 0.0.104
+                Use ``languages`` instead. If both are provided, ``languages``
+                takes precedence. This field is here just for backward
+                compatibility with dict-based settings updates.
+                Will be removed in 2.0.0.
+
+        use_separate_recognition_per_channel: Process each audio channel separately.
+        enable_automatic_punctuation: Add punctuation to transcripts.
+        enable_spoken_punctuation: Include spoken punctuation in transcript.
+        enable_spoken_emojis: Include spoken emojis in transcript.
+        profanity_filter: Filter profanity from transcript.
+        enable_word_time_offsets: Include timing information for each word.
+        enable_word_confidence: Include confidence scores for each word.
+        enable_interim_results: Stream partial recognition results.
+        enable_voice_activity_events: Detect voice activity in audio.
+    """
+
+    languages: list[Language] | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    language_codes: list[str] | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    use_separate_recognition_per_channel: bool | _NotGiven = field(
+        default_factory=lambda: NOT_GIVEN
+    )
+    enable_automatic_punctuation: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    enable_spoken_punctuation: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    enable_spoken_emojis: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    profanity_filter: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    enable_word_time_offsets: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    enable_word_confidence: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    enable_interim_results: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    enable_voice_activity_events: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+
+
 class GoogleSTTService(STTService):
     """Google Cloud Speech-to-Text V2 service implementation.
 
@@ -370,14 +421,25 @@ class GoogleSTTService(STTService):
         ValueError: If project ID is not found in credentials.
     """
 
+    Settings = GoogleSTTSettings
+    _settings: Settings
+
     # Google Cloud's STT service has a connection time limit of 5 minutes per stream.
     # They've shared an "endless streaming" example that guided this implementation:
     # https://cloud.google.com/speech-to-text/docs/transcribe-streaming-audio#endless-streaming
 
     STREAMING_LIMIT = 240000  # 4 minutes in milliseconds
 
+    @deprecated(
+        "`GoogleSTTService.InputParams` is deprecated since 0.0.105 and will be removed in 2.0.0. "
+        "Use `GoogleSTTService.Settings` instead."
+    )
     class InputParams(BaseModel):
         """Configuration parameters for Google Speech-to-Text.
+
+        .. deprecated:: 0.0.105
+            Use ``settings=GoogleSTTService.Settings(...)`` instead.
+            Will be removed in 2.0.0.
 
         Parameters:
             languages: Single language or list of recognition languages. First language is primary.
@@ -393,21 +455,21 @@ class GoogleSTTService(STTService):
             enable_voice_activity_events: Detect voice activity in audio.
         """
 
-        languages: Union[Language, List[Language]] = Field(default_factory=lambda: [Language.EN_US])
-        model: Optional[str] = "latest_long"
-        use_separate_recognition_per_channel: Optional[bool] = False
-        enable_automatic_punctuation: Optional[bool] = True
-        enable_spoken_punctuation: Optional[bool] = False
-        enable_spoken_emojis: Optional[bool] = False
-        profanity_filter: Optional[bool] = False
-        enable_word_time_offsets: Optional[bool] = False
-        enable_word_confidence: Optional[bool] = False
-        enable_interim_results: Optional[bool] = True
-        enable_voice_activity_events: Optional[bool] = False
+        languages: Language | list[Language] = Field(default_factory=lambda: [Language.EN_US])
+        model: str | None = "latest_long"
+        use_separate_recognition_per_channel: bool | None = False
+        enable_automatic_punctuation: bool | None = True
+        enable_spoken_punctuation: bool | None = False
+        enable_spoken_emojis: bool | None = False
+        profanity_filter: bool | None = False
+        enable_word_time_offsets: bool | None = False
+        enable_word_confidence: bool | None = False
+        enable_interim_results: bool | None = True
+        enable_voice_activity_events: bool | None = False
 
         @field_validator("languages", mode="before")
         @classmethod
-        def validate_languages(cls, v) -> List[Language]:
+        def validate_languages(cls, v) -> list[Language]:
             """Ensure languages is always a list.
 
             Args:
@@ -421,7 +483,7 @@ class GoogleSTTService(STTService):
             return v
 
         @property
-        def language_list(self) -> List[Language]:
+        def language_list(self) -> list[Language]:
             """Get languages as a guaranteed list.
 
             Returns:
@@ -433,11 +495,13 @@ class GoogleSTTService(STTService):
     def __init__(
         self,
         *,
-        credentials: Optional[str] = None,
-        credentials_path: Optional[str] = None,
+        credentials: str | None = None,
+        credentials_path: str | None = None,
         location: str = "global",
-        sample_rate: Optional[int] = None,
-        params: Optional[InputParams] = None,
+        sample_rate: int | None = None,
+        params: InputParams | None = None,
+        settings: Settings | None = None,
+        ttfs_p99_latency: float | None = GOOGLE_TTFS_P99,
         **kwargs,
     ):
         """Initialize the Google STT service.
@@ -448,11 +512,64 @@ class GoogleSTTService(STTService):
             location: Google Cloud location (e.g., "global", "us-central1").
             sample_rate: Audio sample rate in Hertz.
             params: Configuration parameters for the service.
+
+                .. deprecated:: 0.0.105
+                    Use ``settings=GoogleSTTService.Settings(...)`` instead.
+                    Will be removed in 2.0.0.
+
+            settings: Runtime-updatable settings. When provided alongside deprecated
+                ``params``, ``settings`` values take precedence.
+            ttfs_p99_latency: P99 latency from speech end to final transcript in seconds.
+                Override for your deployment. See https://github.com/pipecat-ai/stt-benchmark
             **kwargs: Additional arguments passed to STTService.
         """
-        super().__init__(sample_rate=sample_rate, **kwargs)
+        # 1. Initialize default_settings with hardcoded defaults
+        default_settings = self.Settings(
+            language=None,
+            languages=[Language.EN_US],
+            language_codes=None,
+            model="latest_long",
+            use_separate_recognition_per_channel=False,
+            enable_automatic_punctuation=True,
+            enable_spoken_punctuation=False,
+            enable_spoken_emojis=False,
+            profanity_filter=False,
+            enable_word_time_offsets=False,
+            enable_word_confidence=False,
+            enable_interim_results=True,
+            enable_voice_activity_events=False,
+        )
 
-        params = params or GoogleSTTService.InputParams()
+        # 2. No direct init arg overrides
+
+        # 3. Apply params overrides — only if settings not provided
+        if params is not None:
+            self._warn_init_param_moved_to_settings("params")
+            if not settings:
+                default_settings.languages = list(params.language_list)
+                default_settings.model = params.model
+                default_settings.use_separate_recognition_per_channel = (
+                    params.use_separate_recognition_per_channel
+                )
+                default_settings.enable_automatic_punctuation = params.enable_automatic_punctuation
+                default_settings.enable_spoken_punctuation = params.enable_spoken_punctuation
+                default_settings.enable_spoken_emojis = params.enable_spoken_emojis
+                default_settings.profanity_filter = params.profanity_filter
+                default_settings.enable_word_time_offsets = params.enable_word_time_offsets
+                default_settings.enable_word_confidence = params.enable_word_confidence
+                default_settings.enable_interim_results = params.enable_interim_results
+                default_settings.enable_voice_activity_events = params.enable_voice_activity_events
+
+        # 4. Apply settings delta (canonical API, always wins)
+        if settings is not None:
+            default_settings.apply_update(settings)
+
+        super().__init__(
+            sample_rate=sample_rate,
+            ttfs_p99_latency=ttfs_p99_latency,
+            settings=default_settings,
+            **kwargs,
+        )
 
         self._location = location
         self._stream = None
@@ -477,7 +594,7 @@ class GoogleSTTService(STTService):
             client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
 
         # Extract project ID and create client
-        creds: Optional[service_account.Credentials] = None
+        creds: service_account.Credentials | None = None
         if credentials:
             json_account_info = json.loads(credentials)
             self._project_id = json_account_info.get("project_id")
@@ -504,22 +621,6 @@ class GoogleSTTService(STTService):
 
         self._client = speech_v2.SpeechAsyncClient(credentials=creds, client_options=client_options)
 
-        self._settings = {
-            "language_codes": [
-                self.language_to_service_language(lang) for lang in params.language_list
-            ],
-            "model": params.model,
-            "use_separate_recognition_per_channel": params.use_separate_recognition_per_channel,
-            "enable_automatic_punctuation": params.enable_automatic_punctuation,
-            "enable_spoken_punctuation": params.enable_spoken_punctuation,
-            "enable_spoken_emojis": params.enable_spoken_emojis,
-            "profanity_filter": params.profanity_filter,
-            "enable_word_time_offsets": params.enable_word_time_offsets,
-            "enable_word_confidence": params.enable_word_confidence,
-            "enable_interim_results": params.enable_interim_results,
-            "enable_voice_activity_events": params.enable_voice_activity_events,
-        }
-
     def can_generate_metrics(self) -> bool:
         """Check if the service can generate metrics.
 
@@ -528,18 +629,38 @@ class GoogleSTTService(STTService):
         """
         return True
 
-    def language_to_service_language(self, language: Language | List[Language]) -> str | List[str]:
-        """Convert Language enum(s) to Google STT language code(s).
+    def language_to_service_language(self, language: Language) -> str:
+        """Convert a Language enum to a Google STT language code.
+
+        Narrower return type than the base class's ``str | None``: this
+        override always returns a string, falling back to ``"en-US"`` for
+        languages not in the verified mapping (see
+        :func:`language_to_google_stt_language`).
 
         Args:
-            language: Single Language enum or list of Language enums.
+            language: The Language enum value to convert.
 
         Returns:
-            str | List[str]: Google STT language code(s).
+            The Google STT language code.
         """
-        if isinstance(language, list):
-            return [language_to_google_stt_language(lang) or "en-US" for lang in language]
         return language_to_google_stt_language(language) or "en-US"
+
+    def _get_language_codes(self) -> list[str]:
+        """Resolve the current language settings to Google STT language code strings.
+
+        Prefers ``languages`` (``Language`` enums) over the deprecated
+        ``language_codes`` (raw strings). Falls back to ``["en-US"]``.
+
+        Returns:
+            List[str]: Google STT language code strings.
+        """
+        languages = assert_given(self._settings.languages)
+        if languages:
+            return [self.language_to_service_language(lang) for lang in languages]
+        language_codes = assert_given(self._settings.language_codes)
+        if language_codes:
+            return list(language_codes)
+        return ["en-US"]
 
     async def _reconnect_if_needed(self):
         """Reconnect the stream if it's currently active."""
@@ -548,41 +669,62 @@ class GoogleSTTService(STTService):
             await self._disconnect()
             await self._connect()
 
-    async def set_language(self, language: Language):
-        """Update the service's recognition language.
-
-        A convenience method for setting a single language.
-
-        Args:
-            language: New language for recognition.
-        """
-        logger.debug(f"Switching STT language to: {language}")
-        await self.set_languages([language])
-
-    async def set_languages(self, languages: List[Language]):
+    @deprecated(
+        "`GoogleSTTService.set_languages` is deprecated since 0.0.104 and will be removed in "
+        "2.0.0. Use `STTUpdateSettingsFrame` instead."
+    )
+    async def set_languages(self, languages: list[Language]):
         """Update the service's recognition languages.
+
+        .. deprecated:: 0.0.104
+            Use :class:`STTUpdateSettingsFrame` with ``GoogleSTTService.Settings(languages=...)``
+            instead. Will be removed in 2.0.0.
 
         Args:
             languages: List of languages for recognition. First language is primary.
         """
         logger.debug(f"Switching STT languages to: {languages}")
-        self._settings["language_codes"] = [
-            self.language_to_service_language(lang) for lang in languages
-        ]
-        # Recreate stream with new languages
-        await self._reconnect_if_needed()
+        await self._update_settings(self.Settings(languages=list(languages)))
 
-    async def set_model(self, model: str):
-        """Update the service's recognition model.
+    async def _update_settings(self, delta: Settings) -> dict[str, Any]:
+        """Apply settings delta and reconnect if anything changed.
+
+        Handles ``language`` from base ``set_language`` by converting it to
+        ``languages``. Emits a deprecation warning if ``language_codes`` is
+        used. All other fields (model, boolean flags) are applied directly.
+        Reconnects the stream on any change.
 
         Args:
-            model: The new recognition model to use.
+            delta: A settings delta.
+
+        Returns:
+            Dict mapping changed field names to their previous values.
         """
-        logger.debug(f"Switching STT model to: {model}")
-        await super().set_model(model)
-        self._settings["model"] = model
-        # Recreate stream with new model
-        await self._reconnect_if_needed()
+        from pipecat.services.settings import is_given
+
+        # If base set_language sent a Language value, convert to languages list
+        if is_given(delta.language):
+            delta.languages = [delta.language]
+            # Clear language so the base class doesn't try to store it
+            delta.language = NOT_GIVEN
+
+        # Warn on deprecated language_codes usage
+        if is_given(delta.language_codes):
+            with warnings.catch_warnings():
+                warnings.simplefilter("always")
+                warnings.warn(
+                    "self.Settings.language_codes is deprecated. "
+                    "Use self.Settings.languages (List[Language]) instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+
+        changed = await super()._update_settings(delta)
+
+        if changed:
+            await self._reconnect_if_needed()
+
+        return changed
 
     async def start(self, frame: StartFrame):
         """Start the STT service and establish connection.
@@ -611,22 +753,30 @@ class GoogleSTTService(STTService):
         await super().cancel(frame)
         await self._disconnect()
 
+    @deprecated(
+        "`GoogleSTTService.update_options` is deprecated since 0.0.104 and will be removed in "
+        "2.0.0. Use `STTUpdateSettingsFrame` instead."
+    )
     async def update_options(
         self,
         *,
-        languages: Optional[List[Language]] = None,
-        model: Optional[str] = None,
-        enable_automatic_punctuation: Optional[bool] = None,
-        enable_spoken_punctuation: Optional[bool] = None,
-        enable_spoken_emojis: Optional[bool] = None,
-        profanity_filter: Optional[bool] = None,
-        enable_word_time_offsets: Optional[bool] = None,
-        enable_word_confidence: Optional[bool] = None,
-        enable_interim_results: Optional[bool] = None,
-        enable_voice_activity_events: Optional[bool] = None,
-        location: Optional[str] = None,
+        languages: list[Language] | None = None,
+        model: str | None = None,
+        enable_automatic_punctuation: bool | None = None,
+        enable_spoken_punctuation: bool | None = None,
+        enable_spoken_emojis: bool | None = None,
+        profanity_filter: bool | None = None,
+        enable_word_time_offsets: bool | None = None,
+        enable_word_confidence: bool | None = None,
+        enable_interim_results: bool | None = None,
+        enable_voice_activity_events: bool | None = None,
+        location: str | None = None,
     ) -> None:
         """Update service options dynamically.
+
+        .. deprecated:: 0.0.104
+            Use :class:`STTUpdateSettingsFrame` with ``GoogleSTTService.Settings(...)``
+            instead. Will be removed in 2.0.0.
 
         Args:
             languages: New list of recognition languages.
@@ -645,55 +795,35 @@ class GoogleSTTService(STTService):
             Changes that affect the streaming configuration will cause
             the stream to be reconnected.
         """
-        # Update settings with new values
+        # Build a settings delta from the provided options
+        delta = self.Settings()
+
         if languages is not None:
-            logger.debug(f"Updating language to: {languages}")
-            self._settings["language_codes"] = [
-                self.language_to_service_language(lang) for lang in languages
-            ]
-
+            delta.languages = list(languages)
         if model is not None:
-            logger.debug(f"Updating model to: {model}")
-            self._settings["model"] = model
-
+            delta.model = model
         if enable_automatic_punctuation is not None:
-            logger.debug(f"Updating automatic punctuation to: {enable_automatic_punctuation}")
-            self._settings["enable_automatic_punctuation"] = enable_automatic_punctuation
-
+            delta.enable_automatic_punctuation = enable_automatic_punctuation
         if enable_spoken_punctuation is not None:
-            logger.debug(f"Updating spoken punctuation to: {enable_spoken_punctuation}")
-            self._settings["enable_spoken_punctuation"] = enable_spoken_punctuation
-
+            delta.enable_spoken_punctuation = enable_spoken_punctuation
         if enable_spoken_emojis is not None:
-            logger.debug(f"Updating spoken emojis to: {enable_spoken_emojis}")
-            self._settings["enable_spoken_emojis"] = enable_spoken_emojis
-
+            delta.enable_spoken_emojis = enable_spoken_emojis
         if profanity_filter is not None:
-            logger.debug(f"Updating profanity filter to: {profanity_filter}")
-            self._settings["profanity_filter"] = profanity_filter
-
+            delta.profanity_filter = profanity_filter
         if enable_word_time_offsets is not None:
-            logger.debug(f"Updating word time offsets to: {enable_word_time_offsets}")
-            self._settings["enable_word_time_offsets"] = enable_word_time_offsets
-
+            delta.enable_word_time_offsets = enable_word_time_offsets
         if enable_word_confidence is not None:
-            logger.debug(f"Updating word confidence to: {enable_word_confidence}")
-            self._settings["enable_word_confidence"] = enable_word_confidence
-
+            delta.enable_word_confidence = enable_word_confidence
         if enable_interim_results is not None:
-            logger.debug(f"Updating interim results to: {enable_interim_results}")
-            self._settings["enable_interim_results"] = enable_interim_results
-
+            delta.enable_interim_results = enable_interim_results
         if enable_voice_activity_events is not None:
-            logger.debug(f"Updating voice activity events to: {enable_voice_activity_events}")
-            self._settings["enable_voice_activity_events"] = enable_voice_activity_events
+            delta.enable_voice_activity_events = enable_voice_activity_events
 
         if location is not None:
             logger.debug(f"Updating location to: {location}")
             self._location = location
 
-        # Reconnect the stream for updates
-        await self._reconnect_if_needed()
+        await self._update_settings(delta)
 
     async def _connect(self):
         """Initialize streaming recognition config and stream."""
@@ -710,20 +840,20 @@ class GoogleSTTService(STTService):
                     sample_rate_hertz=self.sample_rate,
                     audio_channel_count=1,
                 ),
-                language_codes=self._settings["language_codes"],
-                model=self._settings["model"],
+                language_codes=self._get_language_codes(),
+                model=self._settings.model,
                 features=cloud_speech.RecognitionFeatures(
-                    enable_automatic_punctuation=self._settings["enable_automatic_punctuation"],
-                    enable_spoken_punctuation=self._settings["enable_spoken_punctuation"],
-                    enable_spoken_emojis=self._settings["enable_spoken_emojis"],
-                    profanity_filter=self._settings["profanity_filter"],
-                    enable_word_time_offsets=self._settings["enable_word_time_offsets"],
-                    enable_word_confidence=self._settings["enable_word_confidence"],
+                    enable_automatic_punctuation=self._settings.enable_automatic_punctuation,
+                    enable_spoken_punctuation=self._settings.enable_spoken_punctuation,
+                    enable_spoken_emojis=self._settings.enable_spoken_emojis,
+                    profanity_filter=self._settings.profanity_filter,
+                    enable_word_time_offsets=self._settings.enable_word_time_offsets,
+                    enable_word_confidence=self._settings.enable_word_confidence,
                 ),
             ),
             streaming_features=cloud_speech.StreamingRecognitionFeatures(
-                enable_voice_activity_events=self._settings["enable_voice_activity_events"],
-                interim_results=self._settings["enable_interim_results"],
+                enable_voice_activity_events=self._settings.enable_voice_activity_events,
+                interim_results=self._settings.enable_interim_results,
             ),
         )
 
@@ -812,7 +942,7 @@ class GoogleSTTService(STTService):
         except Exception as e:
             await self.push_error(error_msg=f"Unknown error occurred: {e}", exception=e)
 
-    async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
+    async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame | None, None]:
         """Process an audio chunk for STT transcription.
 
         Args:
@@ -829,7 +959,7 @@ class GoogleSTTService(STTService):
 
     @traced_stt
     async def _handle_transcription(
-        self, transcript: str, is_final: bool, language: Optional[str] = None
+        self, transcript: str, is_final: bool, language: str | None = None
     ):
         pass
 
@@ -853,7 +983,7 @@ class GoogleSTTService(STTService):
                     if not transcript:
                         continue
 
-                    primary_language = self._settings["language_codes"][0]
+                    primary_language = self._get_language_codes()[0]
 
                     if result.is_final:
                         self._last_transcript_was_final = True
@@ -886,7 +1016,7 @@ class GoogleSTTService(STTService):
         except Aborted as e:
             # Handle stream abort due to inactivity (409 error).
             # This occurs when no audio is sent to the stream for 10+ seconds,
-            # which can happen when InputAudioRawFrames are blocked (e.g., by STTMuteFilter).
+            # which can happen when InputAudioRawFrames are blocked.
             # Google's STT service automatically closes the stream in this case.
             # We log at DEBUG level (not ERROR) since this is recoverable, then re-raise
             # to trigger automatic reconnection in _stream_audio.

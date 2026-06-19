@@ -10,8 +10,9 @@ This module provides schemas for managing both standardized function tools
 and custom adapter-specific tools in the Pipecat framework.
 """
 
+from collections.abc import Sequence
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pipecat.adapters.schemas.direct_function import DirectFunction, DirectFunctionWrapper
 from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -21,13 +22,12 @@ class AdapterType(Enum):
     """Supported adapter types for custom tools.
 
     Parameters:
-        GEMINI: Google Gemini adapter - currently the only service supporting custom tools.
-        SHIM: Backward compatibility shim for creating ToolsSchemas from lists of tools in
-              any format, used by LLMContext.from_openai_context.
+        GEMINI: Google Gemini adapter.
+        OPENAI: OpenAI adapter (Chat Completions, Responses, and Realtime API).
     """
 
-    GEMINI = "gemini"  # that is the only service where we are able to add custom tools for now
-    SHIM = "shim"  # for use as backward compatibility shim for creating ToolsSchemas from list of tools in any format
+    GEMINI = "gemini"
+    OPENAI = "openai"
 
 
 class ToolsSchema:
@@ -40,8 +40,8 @@ class ToolsSchema:
 
     def __init__(
         self,
-        standard_tools: List[FunctionSchema | DirectFunction],
-        custom_tools: Optional[Dict[AdapterType, List[Dict[str, Any]]]] = None,
+        standard_tools: Sequence[FunctionSchema | DirectFunction],
+        custom_tools: dict[AdapterType, list[dict[str, Any]]] | None = None,
     ) -> None:
         """Initialize the tools schema.
 
@@ -53,21 +53,23 @@ class ToolsSchema:
 
         def _map_standard_tools(tools):
             schemas = []
+            direct_functions = []
             for tool in tools:
                 if isinstance(tool, FunctionSchema):
                     schemas.append(tool)
                 elif callable(tool):
                     wrapper = DirectFunctionWrapper(tool)
                     schemas.append(wrapper.to_function_schema())
+                    direct_functions.append(wrapper)
                 else:
                     raise TypeError(f"Unsupported tool type: {type(tool)}")
-            return schemas
+            return schemas, direct_functions
 
-        self._standard_tools = _map_standard_tools(standard_tools)
+        self._standard_tools, self._direct_functions = _map_standard_tools(standard_tools)
         self._custom_tools = custom_tools
 
     @property
-    def standard_tools(self) -> List[FunctionSchema]:
+    def standard_tools(self) -> list[FunctionSchema]:
         """Get the list of standard function schema tools.
 
         Returns:
@@ -76,7 +78,20 @@ class ToolsSchema:
         return self._standard_tools
 
     @property
-    def custom_tools(self) -> Dict[AdapterType, List[Dict[str, Any]]]:
+    def direct_functions(self) -> list[DirectFunctionWrapper]:
+        """Get the wrappers for standard tools that were given as direct functions.
+
+        These retain a reference to the original callable, allowing the LLM
+        service to register their handlers automatically. Standard tools given
+        as ``FunctionSchema`` objects (advertise-only) are not included.
+
+        Returns:
+            List of ``DirectFunctionWrapper`` for the callable standard tools.
+        """
+        return self._direct_functions
+
+    @property
+    def custom_tools(self) -> dict[AdapterType, list[dict[str, Any]]] | None:
         """Get the custom tools dictionary.
 
         Returns:
@@ -85,7 +100,7 @@ class ToolsSchema:
         return self._custom_tools
 
     @custom_tools.setter
-    def custom_tools(self, value: Dict[AdapterType, List[Dict[str, Any]]]) -> None:
+    def custom_tools(self, value: dict[AdapterType, list[dict[str, Any]]]) -> None:
         """Set the custom tools dictionary.
 
         Args:

@@ -12,8 +12,8 @@ support for custom handlers and configurable actions for when a pattern is found
 """
 
 import re
+from collections.abc import AsyncIterator, Awaitable, Callable
 from enum import Enum
-from typing import AsyncIterator, Awaitable, Callable, List, Optional, Tuple
 
 from loguru import logger
 
@@ -96,8 +96,11 @@ class PatternPairAggregator(SimpleTextAggregator):
 
         Creates an empty aggregator with no patterns or handlers registered.
         Text buffering and pattern detection will begin when text is aggregated.
+
+        Args:
+            **kwargs: Additional arguments passed to SimpleTextAggregator (e.g. aggregation_type).
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self._patterns = {}
         self._handlers = {}
         self._last_processed_position = 0  # Track where we last checked for complete patterns
@@ -146,7 +149,7 @@ class PatternPairAggregator(SimpleTextAggregator):
         Returns:
             Self for method chaining.
         """
-        if type in [AggregationType.SENTENCE, AggregationType.WORD]:
+        if type in [AggregationType.SENTENCE, AggregationType.WORD, AggregationType.TOKEN]:
             raise ValueError(
                 f"The aggregation type '{type}' is reserved for default behavior and can not be used for custom patterns."
             )
@@ -157,46 +160,6 @@ class PatternPairAggregator(SimpleTextAggregator):
             "action": action,
         }
         return self
-
-    def add_pattern_pair(
-        self, pattern_id: str, start_pattern: str, end_pattern: str, remove_match: bool = True
-    ):
-        """Add a pattern pair to detect in the text.
-
-        .. deprecated:: 0.0.95
-            This function is deprecated and will be removed in a future version.
-            Use `add_pattern` with a type and MatchAction instead.
-
-            This method calls `add_pattern` setting type with the provided pattern_id and action
-            to either MatchAction.REMOVE or MatchAction.KEEP based on `remove_match`.
-
-        Args:
-            pattern_id: Identifier for this pattern pair. Should be unique and ideally descriptive.
-                        (e.g., 'code', 'speaker', 'custom'). pattern_id can not be 'sentence' or 'word'
-                        as those arereserved for the default behavior.
-            start_pattern: Pattern that marks the beginning of content.
-            end_pattern: Pattern that marks the end of content.
-            remove_match: If True, the matched pattern will be removed from the text. (Same as MatchAction.REMOVE)
-                          If False, it will be kept and treated as normal text. (Same as MatchAction.KEEP)
-        """
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("once")
-            warnings.warn(
-                "add_pattern_pair with a pattern_id or remove_match is deprecated and will be"
-                " removed in a future version. Use add_pattern with a type and MatchAction instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        action = MatchAction.REMOVE if remove_match else MatchAction.KEEP
-        return self.add_pattern(
-            type=pattern_id,
-            start_pattern=start_pattern,
-            end_pattern=end_pattern,
-            action=action,
-        )
 
     def on_pattern_match(
         self, type: str, handler: Callable[[PatternMatch], Awaitable[None]]
@@ -219,7 +182,7 @@ class PatternPairAggregator(SimpleTextAggregator):
 
     async def _process_complete_patterns(
         self, text: str, last_processed_position: int = 0
-    ) -> Tuple[List[PatternMatch], str]:
+    ) -> tuple[list[PatternMatch], str]:
         """Process newly complete pattern pairs in the text.
 
         Searches for pattern pairs that have been completed since last_processed_position,
@@ -283,7 +246,7 @@ class PatternPairAggregator(SimpleTextAggregator):
 
         return all_matches, processed_text
 
-    def _match_start_of_pattern(self, text: str) -> Optional[Tuple[int, dict]]:
+    def _match_start_of_pattern(self, text: str) -> tuple[int, dict] | None:
         """Check if text contains incomplete pattern pairs.
 
         Determines whether the text contains any start patterns without
@@ -310,7 +273,7 @@ class PatternPairAggregator(SimpleTextAggregator):
             # Which is why we base the return on the first found.
             if start_count > end_count:
                 start_index = text.find(start)
-                return [start_index, pattern_info]
+                return (start_index, pattern_info)
 
         return None
 
@@ -320,6 +283,9 @@ class PatternPairAggregator(SimpleTextAggregator):
         Processes the input text character-by-character, handles pattern pairs,
         and uses the parent's lookahead logic for sentence detection when no
         patterns are active.
+
+        In TOKEN mode, pattern detection still works but non-pattern text is
+        yielded as TOKEN aggregations instead of waiting for sentence boundaries.
 
         Args:
             text: Text to aggregate.
@@ -370,18 +336,35 @@ class PatternPairAggregator(SimpleTextAggregator):
                 # boundaries when a pattern begins (e.g., "Here is code <code>..." yields "Here is code")
                 result = self._text[: pattern_start[0]]
                 self._text = self._text[pattern_start[0] :]
-                yield PatternMatch(
-                    content=result.strip(), type=AggregationType.SENTENCE, full_match=result
+                agg_type = (
+                    AggregationType.TOKEN
+                    if self._aggregation_type == AggregationType.TOKEN
+                    else AggregationType.SENTENCE
                 )
+                yield PatternMatch(content=result.strip(), type=agg_type, full_match=result)
                 continue
 
-            # Use parent's lookahead logic for sentence detection
-            aggregation = await super()._check_sentence_with_lookahead(char)
-            if aggregation:
-                # Convert to PatternMatch for consistency with return type
+            if self._aggregation_type != AggregationType.TOKEN:
+                # Use parent's lookahead logic for sentence detection
+                aggregation = await super()._check_sentence_with_lookahead(char)
+                if aggregation:
+                    # Convert to PatternMatch for consistency with return type
+                    yield PatternMatch(
+                        content=aggregation.text,
+                        type=aggregation.type,
+                        full_match=aggregation.text,
+                    )
+
+        # In TOKEN mode, yield any accumulated text after processing all chars,
+        # but only if there's no incomplete pattern being buffered.
+        if self._aggregation_type == AggregationType.TOKEN and self._text:
+            if self._match_start_of_pattern(self._text) is None:
                 yield PatternMatch(
-                    content=aggregation.text, type=aggregation.type, full_match=aggregation.text
+                    content=self._text,
+                    type=AggregationType.TOKEN,
+                    full_match=self._text,
                 )
+                self._text = ""
 
     async def handle_interruption(self):
         """Handle interruptions by clearing the buffer and pattern state.

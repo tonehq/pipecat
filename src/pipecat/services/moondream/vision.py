@@ -11,7 +11,8 @@ for image analysis and description generation.
 """
 
 import asyncio
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 
 from loguru import logger
 from PIL import Image
@@ -24,6 +25,7 @@ from pipecat.frames.frames import (
     VisionFullResponseStartFrame,
     VisionTextFrame,
 )
+from pipecat.services.settings import VisionSettings, assert_given
 from pipecat.services.vision_service import VisionService
 
 try:
@@ -31,8 +33,8 @@ try:
     from transformers import AutoModelForCausalLM
 except ModuleNotFoundError as e:
     logger.error(f"Exception: {e}")
-    logger.error("In order to use Moondream, you need to `pip install pipecat-ai[moondream]`.")
-    raise Exception(f"Missing module(s): {e}")
+    logger.error('In order to use Moondream, you need to `uv add "pipecat-ai[moondream]"`.')
+    raise ImportError(f"Missing module(s): {e}") from e
 
 
 def detect_device():
@@ -60,6 +62,15 @@ def detect_device():
         return torch.device("cpu"), torch.float32
 
 
+@dataclass
+class MoondreamSettings(VisionSettings):
+    """Settings for the Moondream vision service.
+
+    Parameters:
+        model: Moondream model identifier.
+    """
+
+
 class MoondreamService(VisionService):
     """Moondream vision-language model service.
 
@@ -68,20 +79,46 @@ class MoondreamService(VisionService):
     including CUDA, MPS, and Intel XPU.
     """
 
+    Settings = MoondreamSettings
+    _settings: Settings
+
     def __init__(
-        self, *, model="vikhyatk/moondream2", revision="2025-01-09", use_cpu=False, **kwargs
+        self,
+        *,
+        model: str | None = None,
+        revision="2025-01-09",
+        use_cpu=False,
+        settings: Settings | None = None,
+        **kwargs,
     ):
         """Initialize the Moondream service.
 
         Args:
             model: Hugging Face model identifier for the Moondream model.
+
+                .. deprecated:: 0.0.105
+                    Use ``settings=MoondreamService.Settings(model=...)`` instead.
+                    Will be removed in 2.0.0.
+
             revision: Specific model revision to use.
             use_cpu: Whether to force CPU usage instead of hardware acceleration.
+            settings: Runtime-updatable settings. When provided alongside deprecated
+                parameters, ``settings`` values take precedence.
             **kwargs: Additional arguments passed to the parent VisionService.
         """
-        super().__init__(**kwargs)
+        # 1. Initialize default_settings with hardcoded defaults
+        default_settings = self.Settings(model="vikhyatk/moondream2")
 
-        self.set_model_name(model)
+        # 2. Apply direct init arg overrides (deprecated)
+        if model is not None:
+            self._warn_init_param_moved_to_settings("model", "model")
+            default_settings.model = model
+
+        # 4. Apply settings delta (canonical API, always wins)
+        if settings is not None:
+            default_settings.apply_update(settings)
+
+        super().__init__(settings=default_settings, **kwargs)
 
         if not use_cpu:
             device, dtype = detect_device()
@@ -91,8 +128,11 @@ class MoondreamService(VisionService):
 
         logger.debug("Loading Moondream model...")
 
+        model_path = assert_given(self._settings.model)
+        if model_path is None:
+            raise ValueError("Moondream model must be specified")
         self._model = AutoModelForCausalLM.from_pretrained(
-            model,
+            model_path,
             trust_remote_code=True,
             revision=revision,
             device_map={"": device},
@@ -113,10 +153,15 @@ class MoondreamService(VisionService):
 
         logger.debug(f"Analyzing image (bytes length: {len(frame.image)})")
 
-        def get_image_description(image_bytes: bytes, text: Optional[str]) -> str:
+        def get_image_description(image_bytes: bytes, text: str | None) -> str:
+            if frame.format is None:
+                raise ValueError("Cannot decode image bytes without a format")
             image = Image.frombytes(frame.format, frame.size, image_bytes)
-            image_embeds = self._model.encode_image(image)
-            description = self._model.query(image_embeds, text)["answer"]
+            # `encode_image` and `query` are custom methods provided by the
+            # moondream2 model code (via `trust_remote_code=True`) that pyright
+            # can't see on `AutoModelForCausalLM`'s base type.
+            image_embeds = self._model.encode_image(image)  # pyright: ignore[reportCallIssue]
+            description = self._model.query(image_embeds, text)["answer"]  # pyright: ignore[reportCallIssue]
             return description
 
         description = await asyncio.to_thread(get_image_description, frame.image, frame.text)
