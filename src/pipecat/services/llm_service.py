@@ -63,7 +63,7 @@ from pipecat.processors.aggregators.llm_context import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.ai_service import AIService
-from pipecat.services.settings import LLMSettings, assert_given
+from pipecat.services.settings import LLMSettings, ServiceSettings, assert_given
 from pipecat.services.websocket_service import WebsocketService
 from pipecat.turns.user_turn_completion_mixin import UserTurnCompletionLLMServiceMixin
 from pipecat.utils.async_tool_cancellation import (
@@ -531,7 +531,7 @@ class LLMService(UserTurnCompletionLLMServiceMixin, AIService, Generic[TAdapter]
         self._settings.system_instruction = composed or None
         logger.debug(f"{self}: System instruction composed: {self._settings.system_instruction}")
 
-    async def _update_settings(self, delta: LLMSettings) -> dict[str, Any]:
+    async def _update_settings(self, delta: ServiceSettings) -> dict[str, Any]:
         """Apply a settings delta, handling turn-completion fields.
 
         Args:
@@ -558,9 +558,9 @@ class LLMService(UserTurnCompletionLLMServiceMixin, AIService, Generic[TAdapter]
             self._base_system_instruction = base_si if isinstance(base_si, str) else None
 
         if "user_turn_completion_config" in changed and self._filter_incomplete_user_turns:
-            self.set_user_turn_completion_config(
-                assert_given(self._settings.user_turn_completion_config)
-            )
+            user_turn_config = assert_given(self._settings.user_turn_completion_config)
+            if user_turn_config is not None:
+                self.set_user_turn_completion_config(user_turn_config)
 
         # Any of these fields changes the composed instruction; rebuild it.
         if changed.keys() & {
@@ -754,7 +754,9 @@ class LLMService(UserTurnCompletionLLMServiceMixin, AIService, Generic[TAdapter]
         )
 
         # Create summary context
-        transcript = LLMContextSummarizationUtil.format_messages_for_summary(result.messages)
+        transcript = LLMContextSummarizationUtil.format_messages_for_summary(
+            cast(list[dict], result.messages)
+        )
         summary_context = LLMContext(
             messages=[{"role": "user", "content": f"Conversation history:\n{transcript}"}]
         )

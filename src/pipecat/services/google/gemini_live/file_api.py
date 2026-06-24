@@ -149,7 +149,7 @@ class GeminiFileAPI:
         Returns:
             List of files and next page token if available
         """
-        params = {"key": self._api_key, "pageSize": page_size}
+        params: dict[str, str | int] = {"key": self._api_key, "pageSize": page_size}
 
         if page_token:
             params["pageToken"] = page_token

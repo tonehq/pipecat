@@ -77,7 +77,7 @@ def resolve_credentials(
     access_key = aws_access_key_id or os.getenv("AWS_ACCESS_KEY_ID")
     secret_key = aws_secret_access_key or os.getenv("AWS_SECRET_ACCESS_KEY")
     session_token = aws_session_token or os.getenv("AWS_SESSION_TOKEN")
-    resolved_region = region or os.getenv("AWS_REGION", "us-east-1")
+    resolved_region: str = region or os.getenv("AWS_REGION") or "us-east-1"
 
     # Fall back to the botocore credential provider chain (pod roles, IRSA,
     # instance profiles, SSO, credential files, etc.) when explicit
