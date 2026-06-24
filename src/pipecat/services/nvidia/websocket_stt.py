@@ -24,6 +24,7 @@ Wire protocol (see ``nemotron-streaming/app/server.py``):
 """
 
 import json
+from dataclasses import dataclass
 from typing import AsyncGenerator, Optional
 
 from loguru import logger
@@ -40,6 +41,7 @@ from pipecat.frames.frames import (
     VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
+from pipecat.services.settings import STTSettings
 from pipecat.services.stt_service import WebsocketSTTService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.time import time_now_iso8601
@@ -56,6 +58,13 @@ except ModuleNotFoundError as e:
     raise Exception(f"Missing module: {e}")
 
 
+@dataclass
+class NvidiaSTTSettings(STTSettings):
+    """Settings for NvidiaWebSocketService."""
+
+    pass
+
+
 class NvidiaWebSocketService(WebsocketSTTService):
     """Streaming STT over the Tone Nemotron ``/ws/asr`` WebSocket.
 
@@ -70,6 +79,9 @@ class NvidiaWebSocketService(WebsocketSTTService):
         the server to emit incremental finals.
     """
 
+    Settings = NvidiaSTTSettings
+    _settings: Settings
+
     def __init__(
         self,
         *,
@@ -77,6 +89,7 @@ class NvidiaWebSocketService(WebsocketSTTService):
         sample_rate: Optional[int] = 16000,
         language: Language = Language.EN,
         trace_id: Optional[str] = None,
+        settings: Optional[Settings] = None,
         **kwargs,
     ):
         """Initialize the NVIDIA Nemotron websocket STT service.
@@ -88,14 +101,26 @@ class NvidiaWebSocketService(WebsocketSTTService):
             language: Transcript language tag attached to emitted frames.
             trace_id: Optional correlation id sent to the server as a
                 ``trace_id`` query param so its logs can be joined with ours.
+            settings: Runtime-updatable settings.
             **kwargs: Additional arguments passed to the parent classes.
         """
-        super().__init__(sample_rate=sample_rate, **kwargs)
+        default_settings = self.Settings(
+            model="nvidia/nemotron-speech-streaming-en-0.6b",
+            language=language,
+        )
+
+        if settings is not None:
+            default_settings.apply_update(settings)
+
+        super().__init__(
+            sample_rate=sample_rate,
+            settings=default_settings,
+            **kwargs,
+        )
 
         self._url = url
         self._language = language
         self._trace_id = trace_id
-        self.set_model_name("nvidia/nemotron-speech-streaming-en-0.6b")
 
         self._receive_task = None
         # Tracks the latest partial so we can fall back to it if the server

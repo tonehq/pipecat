@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
-from deepgram.clients.speak.v1.rest.options import dataclass
 from loguru import logger
 from websockets.asyncio.client import connect as websocket_connect
 from websockets.protocol import State
