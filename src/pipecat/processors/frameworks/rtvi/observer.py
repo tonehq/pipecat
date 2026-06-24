@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import (
     TYPE_CHECKING,
+    Any,
     Optional,
 )
 
@@ -361,6 +362,31 @@ class RTVIObserver(BaseObserver):
             return levels[function_name]
         return levels.get("*", RTVIFunctionCallReportLevel.NONE)
 
+    async def _send_function_call_stopped(
+        self,
+        function_name: str,
+        tool_call_id: str,
+        *,
+        cancelled: bool,
+        result: Any = None,
+    ):
+        """Send an LLMFunctionCallStoppedMessage gated by the configured report level."""
+        report_level = self._get_function_call_report_level(function_name)
+        if report_level == RTVIFunctionCallReportLevel.DISABLED:
+            return
+        data = RTVI.LLMFunctionCallStoppedMessageData(
+            tool_call_id=tool_call_id,
+            cancelled=cancelled,
+        )
+        if report_level in (
+            RTVIFunctionCallReportLevel.NAME,
+            RTVIFunctionCallReportLevel.FULL,
+        ):
+            data.function_name = function_name
+        if not cancelled and report_level == RTVIFunctionCallReportLevel.FULL:
+            data.result = result
+        await self.send_rtvi_message(RTVI.LLMFunctionCallStoppedMessage(data=data))
+
     def _apply_config(self, frame: RTVIConfigureObserverFrame):
         """Apply a dynamic observer-config update (only the fields that are set).
 
@@ -495,57 +521,40 @@ class RTVIObserver(BaseObserver):
                 report_level = self._get_function_call_report_level(function_call.function_name)
                 if report_level == RTVIFunctionCallReportLevel.DISABLED:
                     continue
-                data = RTVI.LLMFunctionCallStartMessageData()
+                start_data = RTVI.LLMFunctionCallStartMessageData()
                 if report_level in (
                     RTVIFunctionCallReportLevel.NAME,
                     RTVIFunctionCallReportLevel.FULL,
                 ):
-                    data.function_name = function_call.function_name
-                message = RTVI.LLMFunctionCallStartMessage(data=data)
-                await self.send_rtvi_message(message)
+                    start_data.function_name = function_call.function_name
+                await self.send_rtvi_message(RTVI.LLMFunctionCallStartMessage(data=start_data))
         elif isinstance(frame, FunctionCallInProgressFrame):
             report_level = self._get_function_call_report_level(frame.function_name)
             if report_level != RTVIFunctionCallReportLevel.DISABLED:
-                data = RTVI.LLMFunctionCallInProgressMessageData(tool_call_id=frame.tool_call_id)
+                progress_data = RTVI.LLMFunctionCallInProgressMessageData(
+                    tool_call_id=frame.tool_call_id
+                )
                 if report_level in (
                     RTVIFunctionCallReportLevel.NAME,
                     RTVIFunctionCallReportLevel.FULL,
                 ):
-                    data.function_name = frame.function_name
+                    progress_data.function_name = frame.function_name
                 if report_level == RTVIFunctionCallReportLevel.FULL:
-                    data.arguments = frame.arguments
-                message = RTVI.LLMFunctionCallInProgressMessage(data=data)
-                await self.send_rtvi_message(message)
+                    progress_data.arguments = frame.arguments
+                await self.send_rtvi_message(
+                    RTVI.LLMFunctionCallInProgressMessage(data=progress_data)
+                )
         elif isinstance(frame, FunctionCallCancelFrame):
-            report_level = self._get_function_call_report_level(frame.function_name)
-            if report_level != RTVIFunctionCallReportLevel.DISABLED:
-                data = RTVI.LLMFunctionCallStoppedMessageData(
-                    tool_call_id=frame.tool_call_id,
-                    cancelled=True,
-                )
-                if report_level in (
-                    RTVIFunctionCallReportLevel.NAME,
-                    RTVIFunctionCallReportLevel.FULL,
-                ):
-                    data.function_name = frame.function_name
-                message = RTVI.LLMFunctionCallStoppedMessage(data=data)
-                await self.send_rtvi_message(message)
+            await self._send_function_call_stopped(
+                frame.function_name, frame.tool_call_id, cancelled=True
+            )
         elif isinstance(frame, FunctionCallResultFrame):
-            report_level = self._get_function_call_report_level(frame.function_name)
-            if report_level != RTVIFunctionCallReportLevel.DISABLED:
-                data = RTVI.LLMFunctionCallStoppedMessageData(
-                    tool_call_id=frame.tool_call_id,
-                    cancelled=False,
-                )
-                if report_level in (
-                    RTVIFunctionCallReportLevel.NAME,
-                    RTVIFunctionCallReportLevel.FULL,
-                ):
-                    data.function_name = frame.function_name
-                if report_level == RTVIFunctionCallReportLevel.FULL:
-                    data.result = frame.result if frame.result else None
-                message = RTVI.LLMFunctionCallStoppedMessage(data=data)
-                await self.send_rtvi_message(message)
+            await self._send_function_call_stopped(
+                frame.function_name,
+                frame.tool_call_id,
+                cancelled=False,
+                result=frame.result or None,
+            )
         elif isinstance(frame, RTVIServerMessageFrame):
             message = RTVI.ServerMessage(data=frame.data)
             await self.send_rtvi_message(message)

@@ -11,8 +11,8 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 
-import websockets
 from loguru import logger
+from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 from websockets.protocol import State
 
@@ -42,7 +42,7 @@ class WebsocketService(ABC):
             reconnect_on_error: Whether to automatically reconnect on connection errors.
             **kwargs: Additional arguments (unused, for compatibility).
         """
-        self._websocket: websockets.WebSocketClientProtocol | None = None  # pyright: ignore[reportAttributeAccessIssue]
+        self._websocket: ClientConnection | None = None
         self._reconnect_on_error = reconnect_on_error
         self._reconnect_in_progress: bool = False
         self._disconnecting: bool = False

@@ -31,6 +31,7 @@ from pipecat.frames.frames import (
     LLMEnablePromptCachingFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
+    LLMTextFrame,
 )
 from pipecat.metrics.metrics import LLMTokenUsage
 from pipecat.processors.aggregators.llm_context import LLMContext

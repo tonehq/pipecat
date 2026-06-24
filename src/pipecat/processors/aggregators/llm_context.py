@@ -295,7 +295,7 @@ class LLMContext:
         For ``LLMSpecificMessage`` instances, long string values are truncated
         since the internal structure is provider-specific.
         """
-        result = []
+        result: list[LLMContextMessage] = []
         for message in messages:
             if isinstance(message, LLMSpecificMessage):
                 msg_copy = copy.deepcopy(message)
@@ -327,7 +327,7 @@ class LLMContext:
             if msg.get("mime_type", "").startswith("image/"):
                 msg["data"] = "..."
 
-            result.append(msg)
+            result.append(cast(LLMContextMessage, msg))
         return result
 
     @staticmethod

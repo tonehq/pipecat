@@ -296,7 +296,7 @@ class RTVIProcessor(FrameProcessor):
         try:
             match message.type:
                 case "client-ready":
-                    data = None
+                    client_ready_data: RTVI.ClientReadyData | None = None
                     raw = message.data or {}
                     version = raw.get("version")
                     if isinstance(version, str):
@@ -309,13 +309,14 @@ class RTVIProcessor(FrameProcessor):
                                 logger.warning(
                                     "Invalid 'about' data in client-ready message, ignoring."
                                 )
-                        data = RTVI.ClientReadyData(version=version, about=about)
-                    await self._handle_client_ready(message.id, data)
+                        client_ready_data = RTVI.ClientReadyData(version=version, about=about)
+                    await self._handle_client_ready(message.id, client_ready_data)
                 case "disconnect-bot":
                     await self.push_frame(EndWorkerFrame())
                 case "client-message":
-                    data = RTVI.RawClientMessageData.model_validate(message.data)
-                    await self._handle_client_message(message.id, data)
+                    await self._handle_client_message(
+                        message.id, RTVI.RawClientMessageData.model_validate(message.data)
+                    )
                 case "ui-event":
                     event_data = RTVI.UIEventData.model_validate(message.data or {})
                     await self.push_frame(
@@ -352,11 +353,13 @@ class RTVIProcessor(FrameProcessor):
                         RTVI.UICancelJobGroupMessage(id=message.id, data=cancel_data),
                     )
                 case "llm-function-call-result":
-                    data = RTVI.LLMFunctionCallResultData.model_validate(message.data)
-                    await self._handle_function_call_result(data)
+                    await self._handle_function_call_result(
+                        RTVI.LLMFunctionCallResultData.model_validate(message.data)
+                    )
                 case "send-text":
-                    data = RTVI.SendTextData.model_validate(message.data)
-                    await self._handle_send_text(data)
+                    await self._handle_send_text(
+                        RTVI.SendTextData.model_validate(message.data)
+                    )
                 case "raw-audio" | "raw-audio-batch":
                     await self._handle_audio_buffer(message.data)
 
