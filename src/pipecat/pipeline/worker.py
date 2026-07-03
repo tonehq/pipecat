@@ -59,7 +59,6 @@ from pipecat.frames.frames import (
     TTSSpeakFrame,
     UserSpeakingFrame,
 )
-from pipecat.metrics.metrics import ProcessingMetricsData, TTFBMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
@@ -944,13 +943,17 @@ class PipelineWorker(BaseWorker):
             self._idle_monitor_task = None
 
     def _initial_metrics_frame(self) -> MetricsFrame:
-        """Create an initial metrics frame with zero values for all processors."""
-        processors = self._pipeline.processors_with_metrics()
-        data = []
-        for p in processors:
-            data.append(TTFBMetricsData(processor=p.name, value=0.0))
-            data.append(ProcessingMetricsData(processor=p.name, value=0.0))
-        return MetricsFrame(data=data)
+        """Create an initial metrics frame advertising the processors that will emit metrics.
+
+        Historically this frame carried ``TTFBMetricsData(value=0.0)`` and
+        ``ProcessingMetricsData(value=0.0)`` for every processor as a
+        "baseline" signal. Downstream collectors treated those as real samples,
+        which hid actual latency (0ms rendered instead of the real value on
+        the first turn of every session). The frame is still emitted for
+        backwards compatibility with consumers that watch for the pipeline
+        start signal, but no synthetic zero samples are included.
+        """
+        return MetricsFrame(data=[])
 
     async def _wait_for_pipeline_start(self, frame: Frame):
         """Wait for the specified start frame to reach the end of the pipeline."""

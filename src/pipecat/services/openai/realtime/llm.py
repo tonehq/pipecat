@@ -372,6 +372,14 @@ class OpenAIRealtimeLLMService(LLMService[OpenAIRealtimeLLMAdapter]):
         self._messages_added_manually = {}
         self._pending_function_calls = {}  # Track function calls by call_id
         self._completed_tool_calls = set()
+        # Guard against double-start of TTFB/processing timers. The server-VAD
+        # speech_stopped handler and _create_response both call start_ttfb/
+        # start_processing; without a guard the second call silently overwrites
+        # the earlier start_time. Also protects against timer leakage when a
+        # turn produces no audio delta (text-only / tool-only / cancelled /
+        # errored) by relying on the response.done fallback stop.
+        self._ttfb_started = False
+        self._processing_started = False
         # Whether we've already emitted the "stripping `reasoning`" warning
         # for this service instance. The Realtime API doesn't allow swapping
         # the model mid-session, so once is enough.
@@ -881,6 +889,7 @@ class OpenAIRealtimeLLMService(LLMService[OpenAIRealtimeLLMAdapter]):
         # note: ttfb is faster by 1/2 RTT than ttfb as measured for other services, since we're getting
         # this event from the server
         await self.stop_ttfb_metrics()
+        self._ttfb_started = False
 
         if not self._current_audio_response:
             # First delta of a new assistant turn.
@@ -987,20 +996,27 @@ class OpenAIRealtimeLLMService(LLMService[OpenAIRealtimeLLMAdapter]):
     async def _handle_evt_response_done(self, evt):
         # todo: figure out whether there's anything we need to do for "cancelled" events
         # usage metrics
-        cached_tokens = (
-            evt.response.usage.input_token_details.cached_tokens
-            if hasattr(evt.response.usage, "input_token_details")
-            and evt.response.usage.input_token_details
-            else None
-        )
-        tokens = LLMTokenUsage(
-            prompt_tokens=evt.response.usage.input_tokens,
-            completion_tokens=evt.response.usage.output_tokens,
-            total_tokens=evt.response.usage.total_tokens,
-            cache_read_input_tokens=cached_tokens,
-        )
-        await self.start_llm_usage_metrics(tokens)
+        usage = evt.response.usage
+        if usage and usage.total_tokens:
+            cached_tokens = (
+                usage.input_token_details.cached_tokens
+                if hasattr(usage, "input_token_details") and usage.input_token_details
+                else None
+            )
+            tokens = LLMTokenUsage(
+                prompt_tokens=usage.input_tokens,
+                completion_tokens=usage.output_tokens,
+                total_tokens=usage.total_tokens,
+                cache_read_input_tokens=cached_tokens,
+            )
+            await self.start_llm_usage_metrics(tokens)
+        # Fallback stop for turns that produce no audio delta (text-only,
+        # tool-only, cancelled, errored). If audio.delta already stopped it,
+        # these are no-ops.
+        await self.stop_ttfb_metrics()
+        self._ttfb_started = False
         await self.stop_processing_metrics()
+        self._processing_started = False
         # Push TTSStoppedFrame here (rather than on each per-item
         # response.output_audio.done) so that a response containing multiple
         # output items still emits exactly one bracketing TTSStartedFrame /
@@ -1105,8 +1121,12 @@ class OpenAIRealtimeLLMService(LLMService[OpenAIRealtimeLLMAdapter]):
         # Note: this event is not received when turn detection is disabled,
         # which is good: in that case, local turn detection is responsible for
         # this work.
-        await self.start_ttfb_metrics()
-        await self.start_processing_metrics()
+        if not self._ttfb_started:
+            await self.start_ttfb_metrics()
+            self._ttfb_started = True
+        if not self._processing_started:
+            await self.start_processing_metrics()
+            self._processing_started = True
         await self.broadcast_frame(UserStoppedSpeakingFrame)
 
     async def _maybe_handle_evt_retrieve_conversation_item_error(self, evt: events.ErrorEvent):
@@ -1183,8 +1203,12 @@ class OpenAIRealtimeLLMService(LLMService[OpenAIRealtimeLLMAdapter]):
         logger.debug("Creating response")
 
         await self.push_frame(LLMFullResponseStartFrame())
-        await self.start_processing_metrics()
-        await self.start_ttfb_metrics()
+        if not self._processing_started:
+            await self.start_processing_metrics()
+            self._processing_started = True
+        if not self._ttfb_started:
+            await self.start_ttfb_metrics()
+            self._ttfb_started = True
         await self.send_client_event(
             events.ResponseCreateEvent(
                 response=events.ResponseProperties(output_modalities=self._get_enabled_modalities())

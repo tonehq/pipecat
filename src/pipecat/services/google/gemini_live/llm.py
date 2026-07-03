@@ -641,6 +641,24 @@ class GeminiLiveLLMService(LLMService[GeminiLLMAdapter]):
         # message in the context only carries the id.
         self._tool_call_id_to_name: dict[str, str] = {}
         self._async_tool_warning_logged: bool = False
+        # Guard against double-start of TTFB timers. user_stopped_speaking,
+        # _create_initial_response, and _create_single_response can each call
+        # start_ttfb_metrics; without a guard a later call silently overwrites
+        # the earlier start_time. Also protects against timer leakage when a
+        # turn produces no model_turn (tool-only / errored) by relying on the
+        # turn_complete fallback stop.
+        self._ttfb_started = False
+        # Per-turn accumulation for usage metadata. The server may emit
+        # usage_metadata multiple times per turn; sending each one to
+        # start_llm_usage_metrics would double-count. Instead we track the
+        # latest cumulative counts across the turn and emit once at
+        # turn_complete.
+        self._turn_usage_prompt_tokens = 0
+        self._turn_usage_completion_tokens = 0
+        self._turn_usage_total_tokens = 0
+        self._turn_usage_cached_tokens: int | None = None
+        self._turn_usage_reasoning_tokens: int | None = None
+        self._turn_usage_seen = False
 
     def create_client(self):
         """Create the Gemini API client instance. Subclasses can override this."""
@@ -781,7 +799,11 @@ class GeminiLiveLLMService(LLMService[GeminiLLMAdapter]):
     async def _handle_user_stopped_speaking(self, frame):
         self._user_is_speaking = False
         self._user_audio_preroll_buffer = bytearray()
-        await self.start_ttfb_metrics()
+        # New turn starting: reset accumulated usage metadata.
+        self._reset_turn_usage()
+        if not self._ttfb_started:
+            await self.start_ttfb_metrics()
+            self._ttfb_started = True
         if self._vad_disabled and self._session and self._ready_for_realtime_input:
             try:
                 await self._session.send_realtime_input(activity_end=ActivityEnd())
@@ -1293,12 +1315,15 @@ class GeminiLiveLLMService(LLMService[GeminiLLMAdapter]):
                             # model_turn/output_transcription already defer
                             # bundled grounding metadata to turn_complete.
                             await self._handle_msg_grounding_metadata(message)
+                        # Accumulate usage metadata whenever it appears — the
+                        # server may emit it multiple times per turn. It's
+                        # flushed at turn_complete.
+                        if message.usage_metadata:
+                            await self._handle_msg_usage_metadata(message)
                         if sc and sc.turn_complete:
-                            if not message.usage_metadata:
+                            if not message.usage_metadata and not self._turn_usage_seen:
                                 logger.warning("Received turn_complete without usage_metadata")
                             await self._handle_msg_turn_complete(message)
-                            if message.usage_metadata:
-                                await self._handle_msg_usage_metadata(message)
                         if message.tool_call:
                             await self._handle_msg_tool_call(message)
                         if message.session_resumption_update:
@@ -1601,7 +1626,9 @@ class GeminiLiveLLMService(LLMService[GeminiLLMAdapter]):
             if last_role != "user":
                 seed_messages = messages + [Content(role="user", parts=[Part(text=" ")])]
 
-        await self.start_ttfb_metrics()
+        if not self._ttfb_started:
+            await self.start_ttfb_metrics()
+            self._ttfb_started = True
 
         try:
             await self._session.send_client_content(
@@ -1643,7 +1670,9 @@ class GeminiLiveLLMService(LLMService[GeminiLLMAdapter]):
 
         logger.debug(f"Creating response: {messages}")
 
-        await self.start_ttfb_metrics()
+        if not self._ttfb_started:
+            await self.start_ttfb_metrics()
+            self._ttfb_started = True
 
         try:
             await self._session.send_client_content(turns=messages, turn_complete=True)
@@ -1720,6 +1749,7 @@ class GeminiLiveLLMService(LLMService[GeminiLLMAdapter]):
             return
 
         await self.stop_ttfb_metrics()
+        self._ttfb_started = False
 
         # part.text is added when `modalities` is set to TEXT; otherwise, it's None
         text = part.text
@@ -1828,6 +1858,15 @@ class GeminiLiveLLMService(LLMService[GeminiLLMAdapter]):
 
         self._bot_text_buffer = ""
         self._llm_output_buffer = ""
+
+        # Fallback stop for turns that produce no model_turn (tool-only,
+        # errored). If model_turn already stopped it, this is a no-op.
+        await self.stop_ttfb_metrics()
+        self._ttfb_started = False
+
+        # Emit aggregated usage metadata exactly once per turn (see
+        # _handle_msg_usage_metadata for the accumulation logic).
+        await self._emit_turn_usage_metrics()
 
         # Process grounding metadata if we have accumulated any
         if self._accumulated_grounding_metadata:
@@ -2062,8 +2101,22 @@ class GeminiLiveLLMService(LLMService[GeminiLLMAdapter]):
 
         await self.push_frame(search_frame)
 
+    def _reset_turn_usage(self):
+        """Clear per-turn usage accumulation at the start of a new turn."""
+        self._turn_usage_prompt_tokens = 0
+        self._turn_usage_completion_tokens = 0
+        self._turn_usage_total_tokens = 0
+        self._turn_usage_cached_tokens = None
+        self._turn_usage_reasoning_tokens = None
+        self._turn_usage_seen = False
+
     async def _handle_msg_usage_metadata(self, message: LiveServerMessage):
-        """Handle the usage metadata message."""
+        """Accumulate per-turn usage metadata.
+
+        The server may emit ``usage_metadata`` multiple times per turn;
+        starting llm_usage_metrics on each would over-count. We record the
+        latest cumulative counts here and emit once at turn_complete.
+        """
         if not message.usage_metadata:
             return
 
@@ -2074,15 +2127,37 @@ class GeminiLiveLLMService(LLMService[GeminiLLMAdapter]):
         completion_tokens = usage.response_token_count or 0
         total_tokens = usage.total_token_count or (prompt_tokens + completion_tokens)
 
-        tokens = LLMTokenUsage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            cache_read_input_tokens=usage.cached_content_token_count,
-            reasoning_tokens=usage.thoughts_token_count,
+        # Server-reported counts are cumulative within a turn; take the max
+        # in case an earlier message carried a larger value (defensive).
+        self._turn_usage_prompt_tokens = max(self._turn_usage_prompt_tokens, prompt_tokens)
+        self._turn_usage_completion_tokens = max(
+            self._turn_usage_completion_tokens, completion_tokens
         )
+        self._turn_usage_total_tokens = max(self._turn_usage_total_tokens, total_tokens)
+        if usage.cached_content_token_count is not None:
+            self._turn_usage_cached_tokens = max(
+                self._turn_usage_cached_tokens or 0, usage.cached_content_token_count
+            )
+        if usage.thoughts_token_count is not None:
+            self._turn_usage_reasoning_tokens = max(
+                self._turn_usage_reasoning_tokens or 0, usage.thoughts_token_count
+            )
+        self._turn_usage_seen = True
 
+    async def _emit_turn_usage_metrics(self):
+        """Emit the aggregated usage metrics for the completed turn."""
+        if not self._turn_usage_seen:
+            return
+
+        tokens = LLMTokenUsage(
+            prompt_tokens=self._turn_usage_prompt_tokens,
+            completion_tokens=self._turn_usage_completion_tokens,
+            total_tokens=self._turn_usage_total_tokens,
+            cache_read_input_tokens=self._turn_usage_cached_tokens,
+            reasoning_tokens=self._turn_usage_reasoning_tokens,
+        )
         await self.start_llm_usage_metrics(tokens)
+        self._reset_turn_usage()
 
     def _handle_msg_resumption_update(self, message: LiveServerMessage):
         update = message.session_resumption_update

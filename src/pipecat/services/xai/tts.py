@@ -444,7 +444,12 @@ class XAITTSService(InterruptibleTTSService):
                     )
                     await self.append_to_audio_context(context_id, frame)
             elif msg_type == "audio.done":
-                await self.stop_all_metrics()
+                # TTFB is closed by the base class on the first TTSAudioRawFrame
+                # in _handle_audio_context. Calling stop_all_metrics here also
+                # stopped processing metrics prematurely and, for contexts that
+                # never produced audio (empty response, server error), emitted
+                # a bogus TTFB value. Processing continues naturally past
+                # "audio.done" without an explicit stop.
                 if context_id:
                     await self.append_to_audio_context(
                         context_id, TTSStoppedFrame(context_id=context_id)

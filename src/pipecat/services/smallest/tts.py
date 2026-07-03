@@ -423,7 +423,13 @@ class SmallestTTSService(InterruptibleTTSService):
             status = msg.get("status")
 
             if status == "complete":
-                await self.stop_all_metrics()
+                # TTFB is closed by the base class on the first TTSAudioRawFrame
+                # in _handle_audio_context. Calling stop_all_metrics here also
+                # stopped processing metrics prematurely and, for contexts that
+                # never produced audio (empty response, server error), emitted
+                # a bogus TTFB value. Processing continues naturally past
+                # "complete" without an explicit stop.
+                pass
             elif status == "chunk":
                 await self.stop_ttfb_metrics()
                 context_id = self.get_active_audio_context_id()

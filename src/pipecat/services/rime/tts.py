@@ -606,7 +606,11 @@ class RimeTTSService(WebsocketTTSService):
                         logger.debug(f"Updated cumulative time to: {self._cumulative_time}")
 
             elif msg["type"] == "done":
-                await self.stop_ttfb_metrics()
+                # TTFB is closed by the base class on the first TTSAudioRawFrame
+                # in _handle_audio_context. Stopping it here as well caused a
+                # bogus value to be emitted for contexts that never produced
+                # any audio (e.g. empty responses or server errors handled
+                # via "done" without a preceding audio chunk).
                 await self.append_to_audio_context(
                     context_id, TTSStoppedFrame(context_id=context_id)
                 )
@@ -921,7 +925,12 @@ class RimeHttpTTSService(TTSService):
         except Exception as e:
             yield ErrorFrame(error=f"Unknown error occurred: {e}")
         finally:
-            await self.stop_ttfb_metrics()
+            # TTFB is closed by the base class on the first TTSAudioRawFrame
+            # in _handle_audio_context. Stopping it here as well caused a
+            # bogus value to be emitted for requests that never produced any
+            # audio (empty response, server error) and reached this finally
+            # block without a preceding audio chunk.
+            pass
 
 
 @deprecated(

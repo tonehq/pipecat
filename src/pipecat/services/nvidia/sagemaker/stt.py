@@ -116,6 +116,11 @@ class NvidiaSageMakerSTTService(STTService):
         self._region = region
         self._client: SageMakerBidiClient | None = None
         self._response_task: asyncio.Task | None = None
+        # Set once we've pushed a finalized ``TranscriptionFrame`` for the
+        # current utterance so a late ``input_audio_transcription.completed``
+        # event cannot close a subsequent utterance's TTFB timer and produce a
+        # misattributed reading.
+        self._utterance_finalized: bool = False
 
     def can_generate_metrics(self) -> bool:
         """Check if this service can generate processing metrics.
@@ -188,6 +193,11 @@ class NvidiaSageMakerSTTService(STTService):
 
         if isinstance(frame, VADUserStartedSpeakingFrame):
             logger.debug(f"{self}: VAD user started speaking")
+            # New utterance: allow the next
+            # ``input_audio_transcription.completed`` event to be pushed. Late
+            # completions from the previous utterance are dropped in
+            # ``_process_responses`` while this flag remains ``True``.
+            self._utterance_finalized = False
             await self.start_processing_metrics()
         if isinstance(frame, VADUserStoppedSpeakingFrame):
             logger.debug(f"{self}: VAD user stopped speaking")
@@ -319,6 +329,14 @@ class NvidiaSageMakerSTTService(STTService):
                 elif event_type == "conversation.item.input_audio_transcription.completed":
                     transcript = msg.get("transcript", "")
                     if transcript.strip():
+                        # Drop late completions arriving after we've already
+                        # pushed a finalized transcript for this utterance.
+                        # Pushing another ``finalized=True`` frame would cause
+                        # the base STT class to stop the CURRENT utterance's
+                        # TTFB timer with ``time.time()``, producing a
+                        # spuriously large, misattributed reading.
+                        if self._utterance_finalized:
+                            continue
                         logger.debug(f"{self}: received final transcription: {transcript}")
                         await self.push_frame(
                             TranscriptionFrame(
@@ -330,6 +348,7 @@ class NvidiaSageMakerSTTService(STTService):
                                 finalized=True,
                             )
                         )
+                        self._utterance_finalized = True
                         await self._handle_transcription(transcript, True)
                         await self.stop_processing_metrics()
 
