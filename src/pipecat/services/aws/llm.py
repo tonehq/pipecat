@@ -498,22 +498,27 @@ class AWSBedrockLLMService(LLMService[AWSBedrockLLMAdapter]):
                 # Call AWS Bedrock with streaming
                 response = await self._create_converse_stream(client, request_params)
 
-                await self.stop_ttfb_metrics()
-
                 # Process the streaming response
                 tool_use_block = None
                 json_accumulator = ""
 
                 function_calls = []
+                first_event_seen = False
 
                 async for event in response["stream"]:
                     # Handle text content
                     if "contentBlockDelta" in event:
                         delta = event["contentBlockDelta"]["delta"]
                         if "text" in delta:
+                            if not first_event_seen:
+                                await self.stop_ttfb_metrics()
+                                first_event_seen = True
                             await self.push_frame(LLMTextFrame(delta["text"]))
                             completion_tokens_estimate += self._estimate_tokens(delta["text"])
                         elif "toolUse" in delta and "input" in delta["toolUse"]:
+                            if not first_event_seen:
+                                await self.stop_ttfb_metrics()
+                                first_event_seen = True
                             # Handle partial JSON for tool use
                             json_accumulator += delta["toolUse"]["input"]
                             completion_tokens_estimate += self._estimate_tokens(

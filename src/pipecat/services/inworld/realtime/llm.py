@@ -373,6 +373,15 @@ class InworldRealtimeLLMService(LLMService[InworldRealtimeLLMAdapter]):
         self._pending_function_calls = {}
         self._completed_tool_calls = set()
         self._async_tool_warning_logged: bool = False
+        # Guard against double-start of TTFB/processing timers. Multiple paths
+        # (manual-turn user-stopped, text-only context, server-VAD
+        # speech_stopped, _create_response) can each call start_ttfb/
+        # start_processing; without a guard a later call silently overwrites
+        # the earlier start_time. Also protects against timer leakage when a
+        # turn produces no audio delta (text-only / tool-only / cancelled /
+        # errored) by relying on the response.done fallback stop.
+        self._ttfb_started = False
+        self._processing_started = False
 
         self._register_event_handler("on_conversation_item_created")
         self._register_event_handler("on_conversation_item_updated")
@@ -471,8 +480,12 @@ class InworldRealtimeLLMService(LLMService[InworldRealtimeLLMAdapter]):
         in the server-VAD path.
         """
         if self._is_manual_turn_detection():
-            await self.start_ttfb_metrics()
-            await self.start_processing_metrics()
+            if not self._ttfb_started:
+                await self.start_ttfb_metrics()
+                self._ttfb_started = True
+            if not self._processing_started:
+                await self.start_processing_metrics()
+                self._processing_started = True
             await self.send_client_event(events.InputAudioBufferCommitEvent())
             await self.send_client_event(events.ResponseCreateEvent())
 
@@ -610,8 +623,12 @@ class InworldRealtimeLLMService(LLMService[InworldRealtimeLLMAdapter]):
                             content=[events.ItemContent(type="input_text", text=content)],
                         )
                         await self.send_client_event(events.ConversationItemCreateEvent(item=item))
-                        await self.start_processing_metrics()
-                        await self.start_ttfb_metrics()
+                        if not self._processing_started:
+                            await self.start_processing_metrics()
+                            self._processing_started = True
+                        if not self._ttfb_started:
+                            await self.start_ttfb_metrics()
+                            self._ttfb_started = True
                         await self.send_client_event(events.ResponseCreateEvent())
 
     async def _handle_messages_append(self, frame):
@@ -822,6 +839,7 @@ class InworldRealtimeLLMService(LLMService[InworldRealtimeLLMAdapter]):
     async def _handle_evt_audio_delta(self, evt):
         """Handle audio delta event — streaming audio from assistant."""
         await self.stop_ttfb_metrics()
+        self._ttfb_started = False
 
         if self._current_audio_response and self._current_audio_response.item_id != evt.item_id:
             logger.warning(
@@ -907,7 +925,13 @@ class InworldRealtimeLLMService(LLMService[InworldRealtimeLLMAdapter]):
             )
             await self.start_llm_usage_metrics(tokens)
 
+        # Fallback stop for turns that produce no audio delta (text-only,
+        # tool-only, cancelled, errored). If audio.delta already stopped it,
+        # these are no-ops.
+        await self.stop_ttfb_metrics()
+        self._ttfb_started = False
         await self.stop_processing_metrics()
+        self._processing_started = False
         await self.push_frame(LLMFullResponseEndFrame())
         self._current_assistant_response = None
 
@@ -992,8 +1016,12 @@ class InworldRealtimeLLMService(LLMService[InworldRealtimeLLMAdapter]):
         # from sending a duplicate ResponseCreateEvent when the user aggregator
         # appends the transcribed text to the context.
         self._server_vad_handled_turn = True
-        await self.start_ttfb_metrics()
-        await self.start_processing_metrics()
+        if not self._ttfb_started:
+            await self.start_ttfb_metrics()
+            self._ttfb_started = True
+        if not self._processing_started:
+            await self.start_processing_metrics()
+            self._processing_started = True
         await self.broadcast_frame(UserStoppedSpeakingFrame)
 
     async def _handle_evt_error(self, evt):
@@ -1048,8 +1076,12 @@ class InworldRealtimeLLMService(LLMService[InworldRealtimeLLMAdapter]):
 
         logger.debug("Creating Inworld response")
 
-        await self.start_processing_metrics()
-        await self.start_ttfb_metrics()
+        if not self._processing_started:
+            await self.start_processing_metrics()
+            self._processing_started = True
+        if not self._ttfb_started:
+            await self.start_ttfb_metrics()
+            self._ttfb_started = True
 
         modalities = assert_given(self._settings.session_properties).output_modalities or [
             "text",

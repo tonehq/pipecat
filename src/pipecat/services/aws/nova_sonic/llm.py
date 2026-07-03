@@ -451,6 +451,15 @@ class AWSNovaSonicLLMService(LLMService[AWSNovaSonicLLMAdapter]):
         self._completed_tool_calls = set()
         self._audio_input_started = False
 
+        # Guard against double-start of TTFB/processing timers. Multiple server
+        # events can attempt to open the timer for a single turn (e.g. USER
+        # contentEnd followed by tool use); without a guard the later call
+        # would overwrite the earlier start_time. Also protects against timer
+        # leakage when a turn produces no output (text-only / tool-only /
+        # errored) by relying on the completionEnd fallback stop.
+        self._ttfb_started = False
+        self._processing_started = False
+
         # Session continuation helper. The service itself implements the
         # NovaSonicSessionSender protocol (see methods below) so the helper can
         # target either the current or next session without coupling to the
@@ -1343,6 +1352,31 @@ class AWSNovaSonicLLMService(LLMService[AWSNovaSonicLLMAdapter]):
     async def _handle_completion_start_event(self, event_json):
         pass
 
+    async def _start_response_metrics(self):
+        """Start TTFB / processing timers at the end of a user turn.
+
+        Guarded so that repeated calls within a single turn don't overwrite
+        an already-running timer.
+        """
+        if not self._ttfb_started:
+            await self.start_ttfb_metrics()
+            self._ttfb_started = True
+        if not self._processing_started:
+            await self.start_processing_metrics()
+            self._processing_started = True
+
+    async def _stop_ttfb_metrics_once(self):
+        """Stop the TTFB timer if it is running. No-op on repeated calls."""
+        if self._ttfb_started:
+            await self.stop_ttfb_metrics()
+            self._ttfb_started = False
+
+    async def _stop_processing_metrics_once(self):
+        """Stop the processing timer if it is running. No-op on repeated calls."""
+        if self._processing_started:
+            await self.stop_processing_metrics()
+            self._processing_started = False
+
     async def _handle_content_start_event(self, event_json):
         content_start = event_json["contentStart"]
         type = content_start["type"]
@@ -1392,6 +1426,11 @@ class AWSNovaSonicLLMService(LLMService[AWSNovaSonicLLMAdapter]):
         # Assumption: only one text content per content block
         content.text_content = text_content
 
+        # Stop TTFB timer on the first assistant output chunk (whichever comes
+        # first, text or audio). See _stop_ttfb_metrics_once for the guard.
+        if content.role == Role.ASSISTANT:
+            await self._stop_ttfb_metrics_once()
+
         # Session continuation: track speculative/final text counts for completion signal
         self._sc.on_text_output(
             content.role.value,
@@ -1401,6 +1440,11 @@ class AWSNovaSonicLLMService(LLMService[AWSNovaSonicLLMAdapter]):
     async def _handle_audio_output_event(self, event_json):
         if not self._content_being_received:  # should never happen
             return
+
+        # Stop TTFB timer on the first assistant output chunk (whichever comes
+        # first, text or audio). See _stop_ttfb_metrics_once for the guard.
+        if self._content_being_received.role == Role.ASSISTANT:
+            await self._stop_ttfb_metrics_once()
 
         # Get audio
         audio_content = event_json["audioOutput"]["content"]
@@ -1509,8 +1553,20 @@ class AWSNovaSonicLLMService(LLMService[AWSNovaSonicLLMAdapter]):
                     await self._report_user_transcription_text_added(content.text_content)
                     # Session continuation: add to real-time history
                     self._sc.on_content_end_user_final_text(content.text_content)
+                    # End of the user turn from the server's perspective: start
+                    # TTFB / processing timers. Guarded so that repeated
+                    # user-final-text events within a turn don't overwrite the
+                    # initial start_time.
+                    await self._start_response_metrics()
 
     async def _handle_completion_end_event(self, _):
+        # Fallback stop for turns that produced no output (text-only, tool-only,
+        # cancelled, errored). If audioOutput / textOutput already stopped
+        # TTFB, this is a no-op. Processing metrics are stopped here
+        # unconditionally since completionEnd is the definitive end of the
+        # response for a turn.
+        await self._stop_ttfb_metrics_once()
+        await self._stop_processing_metrics_once()
         # Session continuation: completionEnd is a fallback completion signal
         if self._sc.on_completion_end():
             self.create_task(self._run_sc_handoff(), name="sc_handoff")
@@ -1525,6 +1581,13 @@ class AWSNovaSonicLLMService(LLMService[AWSNovaSonicLLMAdapter]):
 
     async def _report_assistant_response_started(self):
         logger.debug("Assistant response started")
+
+        # Fallback start for TTFB / processing timers, guarded to be a no-op
+        # if USER contentEnd (TEXT/FINAL) already started them. This handles
+        # bot-initiated responses and text-only turns where no user
+        # transcription end event ever arrived.
+        await self._start_response_metrics()
+
         await self.push_frame(LLMFullResponseStartFrame())
 
         # Report that equivalent of TTS (this is a speech-to-speech model) started

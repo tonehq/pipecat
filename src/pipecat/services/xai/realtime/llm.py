@@ -302,6 +302,14 @@ class GrokRealtimeLLMService(LLMService[GrokRealtimeLLMAdapter]):
         self._messages_added_manually = {}
         self._pending_function_calls = {}
         self._completed_tool_calls = set()
+        # Guard against double-start of TTFB/processing timers. speech_stopped
+        # and _create_response both call start_ttfb/start_processing; without a
+        # guard the second call silently overwrites the earlier start_time.
+        # Also protects against timer leakage when a turn produces no audio
+        # delta (text-only / tool-only / cancelled / errored) by relying on
+        # the response.done fallback stop.
+        self._ttfb_started = False
+        self._processing_started = False
 
         self._register_event_handler("on_conversation_item_created")
         self._register_event_handler("on_conversation_item_updated")
@@ -747,6 +755,7 @@ class GrokRealtimeLLMService(LLMService[GrokRealtimeLLMAdapter]):
     async def _handle_evt_audio_delta(self, evt):
         """Handle audio delta event - streaming audio from assistant."""
         await self.stop_ttfb_metrics()
+        self._ttfb_started = False
 
         if not self._current_audio_response:
             self._current_audio_response = CurrentAudioResponse(
@@ -816,7 +825,13 @@ class GrokRealtimeLLMService(LLMService[GrokRealtimeLLMAdapter]):
             )
             await self.start_llm_usage_metrics(tokens)
 
+        # Fallback stop for turns that produce no audio delta (text-only,
+        # tool-only, cancelled, errored). If audio.delta already stopped it,
+        # these are no-ops.
+        await self.stop_ttfb_metrics()
+        self._ttfb_started = False
         await self.stop_processing_metrics()
+        self._processing_started = False
         await self.push_frame(LLMFullResponseEndFrame())
         self._current_assistant_response = None
 
@@ -898,8 +913,12 @@ class GrokRealtimeLLMService(LLMService[GrokRealtimeLLMAdapter]):
             # In local turn detection mode, the client is responsible for broadcasting user turn frames
             return
 
-        await self.start_ttfb_metrics()
-        await self.start_processing_metrics()
+        if not self._ttfb_started:
+            await self.start_ttfb_metrics()
+            self._ttfb_started = True
+        if not self._processing_started:
+            await self.start_processing_metrics()
+            self._processing_started = True
         await self.broadcast_frame(UserStoppedSpeakingFrame)
 
     async def _handle_evt_error(self, evt):
@@ -948,8 +967,12 @@ class GrokRealtimeLLMService(LLMService[GrokRealtimeLLMAdapter]):
         logger.debug("Creating Grok response")
 
         await self.push_frame(LLMFullResponseStartFrame())
-        await self.start_processing_metrics()
-        await self.start_ttfb_metrics()
+        if not self._processing_started:
+            await self.start_processing_metrics()
+            self._processing_started = True
+        if not self._ttfb_started:
+            await self.start_ttfb_metrics()
+            self._ttfb_started = True
 
         await self.send_client_event(
             events.ResponseCreateEvent(

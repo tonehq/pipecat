@@ -386,7 +386,11 @@ class ResembleAITTSService(WebsocketTTSService):
                         await self.add_word_timestamps(word_times, context_id)
 
             elif msg_type == "audio_end":
-                await self.stop_ttfb_metrics()
+                # TTFB is closed by the base class on the first TTSAudioRawFrame
+                # in _handle_audio_context. Stopping it here as well caused a
+                # bogus value to be emitted for contexts that never produced
+                # any audio (e.g. empty responses or server errors handled
+                # via "audio_end" without a preceding audio chunk).
 
                 # Flush remaining buffer, ensuring even length for PCM_16
                 buffer = self._audio_buffers.get(context_id, bytearray())

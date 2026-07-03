@@ -513,5 +513,8 @@ class MiniMaxHttpTTSService(TTSService):
 
         except Exception as e:
             yield ErrorFrame(error=f"Unknown error occurred: {e}", exception=e)
-        finally:
-            await self.stop_ttfb_metrics()
+        # No explicit stop_ttfb_metrics here: the base class closes TTFB when
+        # it forwards the first TTSAudioRawFrame in _handle_audio_context.
+        # Stopping in a finally block also fired on error paths where no audio
+        # was produced, emitting a value that measured the failure latency
+        # rather than a real time-to-first-byte.

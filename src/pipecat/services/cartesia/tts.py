@@ -694,7 +694,11 @@ class CartesiaTTSService(WebsocketTTSService):
                 continue
             ctx_id = msg["context_id"]
             if msg["type"] == "done":
-                await self.stop_ttfb_metrics()
+                # TTFB is closed by the base class on the first TTSAudioRawFrame
+                # in _handle_audio_context. Stopping it here as well caused a
+                # bogus value to be emitted for contexts that never produced
+                # any audio (e.g. empty responses or server errors handled
+                # via "done" without a preceding "chunk").
                 await self.append_to_audio_context(ctx_id, TTSStoppedFrame(context_id=ctx_id))
                 await self.remove_audio_context(ctx_id)
             elif msg["type"] == "timestamps":
@@ -1029,5 +1033,8 @@ class CartesiaHttpTTSService(TTSService):
 
         except Exception as e:
             yield ErrorFrame(error=f"Unknown error occurred: {e}")
-        finally:
-            await self.stop_ttfb_metrics()
+        # No explicit stop_ttfb_metrics here: the base class closes TTFB when
+        # it forwards the first TTSAudioRawFrame in _handle_audio_context.
+        # Stopping in a finally block also fired on error paths where no audio
+        # was produced, emitting a value that measured the failure latency
+        # rather than a real time-to-first-byte.

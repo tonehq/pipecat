@@ -6790,7 +6790,7 @@ wheels = [
 
 [[package]]
 name = "tone-pipecat"
-version = "0.0.76.dev2"
+version = "0.0.76.dev3"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },

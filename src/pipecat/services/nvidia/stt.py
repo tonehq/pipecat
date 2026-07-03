@@ -29,7 +29,9 @@ from pipecat.frames.frames import (
     InterimTranscriptionFrame,
     StartFrame,
     TranscriptionFrame,
+    VADUserStartedSpeakingFrame,
 )
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.settings import NOT_GIVEN, STTSettings, _NotGiven, assert_given
 from pipecat.services.stt_latency import NVIDIA_TTFS_P99
 from pipecat.services.stt_service import SegmentedSTTService, STTService
@@ -358,6 +360,12 @@ class NvidiaSTTService(STTService):
         self._audio_iterator: AudioChunkIterator | None = None
         self._config = None
         self._thread_task = None
+        # Set once we've pushed a finalized ``TranscriptionFrame`` for the
+        # current utterance so a late server ``is_final`` result (Riva can emit
+        # multiple, and a straggler may arrive during a later utterance's TTFB
+        # window) cannot close a subsequent utterance's TTFB timer and produce
+        # a misattributed reading.
+        self._utterance_finalized: bool = False
 
     def _initialize_client(self):
         """Initialize the NVIDIA Nemotron Speech ASR client with authentication metadata."""
@@ -497,6 +505,16 @@ class NvidiaSTTService(STTService):
         await super().cancel(frame)
         await self._stop_tasks()
 
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        """Reset per-utterance finalized state on VAD start."""
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            # New utterance: allow the next server ``is_final`` result to be
+            # pushed. Late finals from the previous utterance are dropped in
+            # ``_handle_response`` while this flag remains ``True``.
+            self._utterance_finalized = False
+
     async def _stop_tasks(self, close_iterator: bool = True):
         """Stop the active stream thread and optionally close the shared iterator.
 
@@ -585,6 +603,14 @@ class NvidiaSTTService(STTService):
             if transcript and len(transcript) > 0:
                 language = assert_given(self._settings.language)
                 if result.is_final:
+                    # Drop late server-side finals arriving after we've already
+                    # pushed one for this utterance. Pushing another
+                    # ``finalized=True`` frame would cause the base STT class
+                    # to stop the CURRENT utterance's TTFB timer with
+                    # ``time.time()``, producing a spuriously large,
+                    # misattributed reading.
+                    if self._utterance_finalized:
+                        continue
                     await self.stop_processing_metrics()
                     logger.debug(f"Transcription: [{transcript}]")
                     await self.push_frame(
@@ -597,6 +623,7 @@ class NvidiaSTTService(STTService):
                             finalized=True,
                         )
                     )
+                    self._utterance_finalized = True
                     await self._handle_transcription(
                         transcript=transcript,
                         is_final=result.is_final,

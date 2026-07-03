@@ -424,7 +424,12 @@ class InworldHttpTTSService(TTSService):
             await self.push_error(error_msg=f"Unknown error occurred: {e}", exception=e)
 
         finally:
-            await self.stop_all_metrics()
+            # TTFB is closed by the base class on the first TTSAudioRawFrame
+            # in _handle_audio_context. Calling stop_all_metrics here also
+            # emitted a bogus TTFB value for requests that never produced any
+            # audio (empty response, server error) and reached this finally
+            # block without a preceding audio chunk.
+            pass
 
     async def _process_streaming_response(
         self, response: aiohttp.ClientResponse, context_id: str
@@ -1145,7 +1150,11 @@ class InworldTTSService(WebsocketTTSService):
             if "contextClosed" in result:
                 logger.debug(f"{self}: Context closed on server: {ctx_id}")
                 await self._maybe_push_fallback_text(ctx_id)
-                await self.stop_ttfb_metrics()
+                # TTFB is closed by the base class on the first TTSAudioRawFrame
+                # in _handle_audio_context. Stopping it here as well caused a
+                # bogus value to be emitted for contexts that never produced
+                # any audio (e.g. empty responses or server errors handled
+                # via "contextClosed" without a preceding audio chunk).
                 await self.append_to_audio_context(ctx_id, TTSStoppedFrame(context_id=ctx_id))
                 await self.remove_audio_context(ctx_id)
 

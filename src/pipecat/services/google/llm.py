@@ -471,6 +471,8 @@ class GoogleLLMService(LLMService[GeminiLLMAdapter]):
         accumulated_text = ""
 
         try:
+            await self.start_processing_metrics()
+
             # Generate content from LLMContext
             response = await self._stream_content(context)
 
@@ -628,6 +630,7 @@ class GoogleLLMService(LLMService[GeminiLLMAdapter]):
         except Exception as e:
             await self.push_error(error_msg=f"Unknown error occurred: {e}", exception=e)
         finally:
+            await self.stop_processing_metrics()
             if grounding_metadata and isinstance(grounding_metadata, dict):
                 llm_search_frame = LLMSearchResponseFrame(
                     search_result=accumulated_text,
@@ -636,15 +639,16 @@ class GoogleLLMService(LLMService[GeminiLLMAdapter]):
                 )
                 await self.push_frame(llm_search_frame)
 
-            await self.start_llm_usage_metrics(
-                LLMTokenUsage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    cache_read_input_tokens=cache_read_input_tokens,
-                    reasoning_tokens=reasoning_tokens,
+            if prompt_tokens or completion_tokens or cache_read_input_tokens:
+                await self.start_llm_usage_metrics(
+                    LLMTokenUsage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                        cache_read_input_tokens=cache_read_input_tokens,
+                        reasoning_tokens=reasoning_tokens,
+                    )
                 )
-            )
             await self.push_frame(LLMFullResponseEndFrame())
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):

@@ -24,6 +24,7 @@ Wire protocol (see ``nemotron-streaming/app/server.py``):
 """
 
 import json
+import time
 from dataclasses import dataclass
 from typing import AsyncGenerator, Optional
 
@@ -126,6 +127,17 @@ class NvidiaWebSocketService(WebsocketSTTService):
         # Tracks the latest partial so we can fall back to it if the server
         # never emits an explicit final.
         self._last_partial: str = ""
+        # Arrival time of the most recent partial from the server. Used as the
+        # authoritative "first token" moment for TTFB — the base STT class
+        # would otherwise close TTFB against ``time.time()`` when the synthetic
+        # final is pushed on VAD stop, which just measures VAD ``stop_secs``
+        # rather than server latency.
+        self._last_partial_time: float = 0.0
+        # Set once we've synthesised a final for the current utterance so a
+        # late server ``final`` (the Nemotron v1 server only sends its own
+        # final after ``eof``) cannot close a subsequent utterance's TTFB
+        # timer and produce a misattributed reading.
+        self._utterance_finalized: bool = False
 
     def __str__(self):
         return f"{self.name}"
@@ -195,6 +207,11 @@ class NvidiaWebSocketService(WebsocketSTTService):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, VADUserStartedSpeakingFrame):
+            # New utterance: reset per-utterance TTFB tracking so a late
+            # server final from the previous utterance can't leak into this
+            # one.
+            self._last_partial_time = 0.0
+            self._utterance_finalized = False
             await self.start_processing_metrics()
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             await self._finalize_utterance()
@@ -202,11 +219,25 @@ class NvidiaWebSocketService(WebsocketSTTService):
     async def _finalize_utterance(self):
         """Emit a synthetic final transcript from the latest partial on VAD stop."""
         final_text = self._last_partial
+        last_partial_time = self._last_partial_time
         self._last_partial = ""
 
         if not final_text:
             await self.stop_processing_metrics()
             return
+
+        # Close TTFB against the moment the last partial actually arrived from
+        # the server, not "now". Otherwise every TTFB reads as roughly the
+        # VAD stop delay (base ``start_ttfb_metrics`` uses
+        # ``speech_end_time = timestamp - stop_secs`` as its start, and the
+        # base auto-stop on ``TranscriptionFrame`` uses ``time.time()``).
+        if last_partial_time > 0.0:
+            await self.stop_ttfb_metrics(end_time=last_partial_time)
+
+        # Mark the utterance finalised so any late server ``final`` (v1
+        # Nemotron sends its own final only after ``eof``) is ignored
+        # downstream and doesn't close a later utterance's TTFB timer.
+        self._utterance_finalized = True
 
         self.request_finalize()
         self.confirm_finalize()
@@ -253,6 +284,8 @@ class NvidiaWebSocketService(WebsocketSTTService):
             logger.debug(f"{self} connecting to Nemotron WebSocket {url}")
             self._websocket = await websocket_connect(url)
             self._last_partial = ""
+            self._last_partial_time = 0.0
+            self._utterance_finalized = False
             await self._call_event_handler("on_connected")
             logger.debug(f"{self} connected to Nemotron WebSocket")
         except Exception as e:
@@ -305,6 +338,7 @@ class NvidiaWebSocketService(WebsocketSTTService):
 
             if msg_type == "partial":
                 self._last_partial = text
+                self._last_partial_time = time.time()
                 await self.push_frame(
                     InterimTranscriptionFrame(
                         text,
@@ -315,6 +349,13 @@ class NvidiaWebSocketService(WebsocketSTTService):
                     )
                 )
             elif msg_type == "final":
+                # Drop server-side finals arriving after we've already
+                # synthesised one for this utterance (VAD stop path). Pushing
+                # them would cause the base STT class to stop the CURRENT
+                # utterance's TTFB timer with ``time.time()``, producing a
+                # spuriously large, misattributed reading.
+                if self._utterance_finalized:
+                    continue
                 final_text = text or self._last_partial
                 self._last_partial = ""
                 await self.push_frame(
