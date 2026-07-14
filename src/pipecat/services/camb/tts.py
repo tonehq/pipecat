@@ -405,7 +405,7 @@ class CambTTSService(TTSService):
             # Stream audio chunks from SDK
             async for chunk in self._client.text_to_speech.tts(**tts_kwargs):
                 if chunk:
-                    await self.stop_ttfb_metrics()
+                    await self.stop_ttfb_metrics(context_id=context_id)
                     audio_buffer += chunk
 
                     # Only yield complete 16-bit samples (2 bytes per sample)

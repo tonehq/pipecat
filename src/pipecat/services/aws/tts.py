@@ -989,7 +989,7 @@ class AWSPollyTTSService(TTSService):
                 for i in range(0, len(audio_data), CHUNK_SIZE):
                     chunk = audio_data[i : i + CHUNK_SIZE]
                     if len(chunk) > 0:
-                        await self.stop_ttfb_metrics()
+                        await self.stop_ttfb_metrics(context_id=context_id)
                         frame = TTSAudioRawFrame(chunk, self.sample_rate, 1, context_id=context_id)
                         yield frame
 

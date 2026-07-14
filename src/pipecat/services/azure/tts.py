@@ -960,7 +960,7 @@ class AzureHttpTTSService(TTSService, AzureBaseTTSService):
 
         if result.reason == ResultReason.SynthesizingAudioCompleted:
             await self.start_tts_usage_metrics(text)
-            await self.stop_ttfb_metrics()
+            await self.stop_ttfb_metrics(context_id=context_id)
             # Azure always sends a 44-byte header. Strip it off.
             yield TTSAudioRawFrame(
                 audio=result.audio_data[44:],

@@ -1011,7 +1011,7 @@ class ElevenLabsTTSService(WebsocketTTSService):
             try:
                 if not self.audio_context_available(context_id):
                     await self.create_audio_context(context_id)
-                    await self.start_ttfb_metrics()
+                    await self.start_ttfb_metrics(context_id=context_id)
                     yield TTSStartedFrame(context_id=context_id)
                     self._cumulative_time = 0
                     self._partial_word = ""
@@ -1478,7 +1478,7 @@ class ElevenLabsHttpTTSService(TTSService):
 
                         # Process audio if present
                         if data and "audio_base64" in data:
-                            await self.stop_ttfb_metrics()
+                            await self.stop_ttfb_metrics(context_id=context_id)
                             audio = base64.b64decode(data["audio_base64"])
                             yield TTSAudioRawFrame(
                                 audio, self.sample_rate, 1, context_id=context_id

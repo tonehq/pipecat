@@ -411,7 +411,7 @@ class AsyncAITTSService(WebsocketTTSService):
                     continue
 
             if msg.get("audio"):
-                await self.stop_ttfb_metrics()
+                await self.stop_ttfb_metrics(context_id=received_ctx_id)
                 audio = base64.b64decode(msg["audio"])
                 frame = TTSAudioRawFrame(audio, self.sample_rate, 1, context_id=received_ctx_id)
                 await self.append_to_audio_context(received_ctx_id, frame)
@@ -717,7 +717,7 @@ class AsyncAIHttpTTSService(TTSService):
                 async for chunk in response.content.iter_chunked(64 * 1024):
                     if not chunk:
                         continue
-                    await self.stop_ttfb_metrics()
+                    await self.stop_ttfb_metrics(context_id=context_id)
                     buffer.extend(chunk)
                 audio_data = bytes(buffer)
 

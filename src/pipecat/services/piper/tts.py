@@ -71,11 +71,12 @@ class PiperTTSService(TTSService):
         return []
 
     @traced_tts
-    async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
+    async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
         """Generate speech from text using Piper's HTTP API.
 
         Args:
             text: The text to convert to speech.
+            context_id: The context ID for tracking audio frames.
 
         Yields:
             Frame: Audio frames containing the synthesized speech and status frames.
@@ -85,7 +86,7 @@ class PiperTTSService(TTSService):
             "Content-Type": "application/json",
         }
         try:
-            await self.start_ttfb_metrics()
+            await self.start_ttfb_metrics(context_id=context_id)
 
             async with self._session.post(
                 self._base_url, json={"text": text}, headers=headers
@@ -106,7 +107,7 @@ class PiperTTSService(TTSService):
                 async for frame in self._stream_audio_frames_from_iterator(
                     response.content.iter_chunked(CHUNK_SIZE), strip_wav_header=True
                 ):
-                    await self.stop_ttfb_metrics()
+                    await self.stop_ttfb_metrics(context_id=context_id)
                     yield frame
         except Exception as e:
             logger.error(f"{self} exception: {e}")

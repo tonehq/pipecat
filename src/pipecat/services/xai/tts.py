@@ -227,7 +227,7 @@ class XAIHttpTTSService(TTSService):
                     if not chunk:
                         continue
                     if measuring_ttfb:
-                        await self.stop_ttfb_metrics()
+                        await self.stop_ttfb_metrics(context_id=context_id)
                         measuring_ttfb = False
                     yield TTSAudioRawFrame(
                         chunk,
@@ -434,7 +434,7 @@ class XAITTSService(InterruptibleTTSService):
                 if not audio_b64:
                     continue
                 audio = base64.b64decode(audio_b64)
-                await self.stop_ttfb_metrics()
+                await self.stop_ttfb_metrics(context_id=context_id)
                 if context_id:
                     frame = TTSAudioRawFrame(
                         audio=audio,

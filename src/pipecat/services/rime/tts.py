@@ -641,7 +641,7 @@ class RimeTTSService(WebsocketTTSService):
             try:
                 if not self.audio_context_available(context_id):
                     await self.create_audio_context(context_id)
-                    await self.start_ttfb_metrics()
+                    await self.start_ttfb_metrics(context_id=context_id)
                     yield TTSStartedFrame(context_id=context_id)
                     self._cumulative_time = 0
 
@@ -919,7 +919,7 @@ class RimeHttpTTSService(TTSService):
                     strip_wav_header=need_to_strip_wav_header,
                     context_id=context_id,
                 ):
-                    await self.stop_ttfb_metrics()
+                    await self.stop_ttfb_metrics(context_id=context_id)
                     yield frame
 
         except Exception as e:
@@ -1220,9 +1220,8 @@ class RimeNonJsonTTSService(InterruptibleTTSService):
             try:
                 # Rime Arcana sends raw audio bytes directly (not JSON)
                 if isinstance(message, bytes):
-                    await self.stop_ttfb_metrics()
-
                     context_id = self.get_active_audio_context_id()
+                    await self.stop_ttfb_metrics(context_id=context_id)
                     frame = TTSAudioRawFrame(
                         audio=message,
                         sample_rate=self.sample_rate,

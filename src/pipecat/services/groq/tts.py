@@ -248,7 +248,7 @@ class GroqTTSService(TTSService):
 
             async for data in response.iter_bytes():
                 if measuring_ttfb:
-                    await self.stop_ttfb_metrics()
+                    await self.stop_ttfb_metrics(context_id=context_id)
                     measuring_ttfb = False
 
                 with wave.open(io.BytesIO(data)) as w:

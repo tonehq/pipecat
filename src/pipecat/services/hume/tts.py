@@ -392,7 +392,7 @@ class HumeTTSService(TTSService):
                 # Process audio chunks
                 audio_b64 = getattr(chunk, "audio", None)
                 if audio_b64:
-                    await self.stop_ttfb_metrics()
+                    await self.stop_ttfb_metrics(context_id=context_id)
                     pcm_bytes = base64.b64decode(audio_b64)
                     self._audio_bytes += pcm_bytes
 

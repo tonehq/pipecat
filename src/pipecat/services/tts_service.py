@@ -931,6 +931,8 @@ class TTSService(AIService):
         if audio_contexts:
             for ctx_id in audio_contexts:
                 await self.on_audio_context_interrupted(context_id=ctx_id)
+                # Interrupted contexts may never emit audio; clear their TTFB/TTFA state.
+                self.discard_ttfb_context_metrics(ctx_id)
         self.reset_active_audio_context()
         self._turn_context_id = None
         self._word_last_pts = 0
@@ -1090,7 +1092,7 @@ class TTSService(AIService):
 
         if self._push_start_frame and not self.audio_context_available(context_id):
             await self.create_audio_context(context_id)
-            await self.start_ttfb_metrics()
+            await self.start_ttfb_metrics(context_id=context_id)
             # Note: TTSStartedFrame's append_to_context is stamped in
             # _handle_audio_context, where every TTSStartedFrame
             # (base-class- and subclass-emitted) funnels through.
@@ -1440,6 +1442,8 @@ class TTSService(AIService):
 
                 # We just finished processing the context, so we can safely remove it.
                 del self._audio_contexts[context_id]
+                # Contexts that ended without audio leave TTFB/TTFA start times behind.
+                self.discard_ttfb_context_metrics(context_id)
                 await self.on_audio_context_completed(context_id=context_id)
                 self.reset_active_audio_context()
             else:
@@ -1511,7 +1515,7 @@ class TTSService(AIService):
                 elif isinstance(frame, TTSAudioRawFrame):
                     # Set the word-timestamp baseline once, on the first audio chunk.
                     if not timestamps_started:
-                        await self.stop_ttfb_metrics()
+                        await self.stop_ttfb_metrics(context_id=context_id)
                         await self.start_word_timestamps()
                         timestamps_started = True
                     await self.process_ttfa_metrics(frame)

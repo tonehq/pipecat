@@ -1370,7 +1370,7 @@ class NvidiaTTSService(TTSService):
             if self._stream_state is not state:
                 continue
 
-            await self.stop_ttfb_metrics()
+            await self.stop_ttfb_metrics(context_id=state.context_id)
             frame = TTSAudioRawFrame(
                 audio=item.audio,
                 sample_rate=self.sample_rate,
@@ -1514,7 +1514,7 @@ class NvidiaTTSService(TTSService):
             # First call for this turn: create audio context and start gRPC stream
             if not self.audio_context_available(context_id):
                 await self.create_audio_context(context_id)
-                await self.start_ttfb_metrics()
+                await self.start_ttfb_metrics(context_id=context_id)
                 yield TTSStartedFrame(context_id=context_id)
                 self._start_synthesis_stream(context_id)
                 logger.trace(f"{self}: Started synthesis stream for context {context_id}")
@@ -1541,7 +1541,7 @@ class NvidiaTTSService(TTSService):
         """Open one fresh ``SynthesizeOnline`` call per split chunk."""
         if not self.audio_context_available(context_id):
             await self.create_audio_context(context_id)
-            await self.start_ttfb_metrics()
+            await self.start_ttfb_metrics(context_id=context_id)
             yield TTSStartedFrame(context_id=context_id)
 
         logger.debug(f"{self}: Generating TTS [{text}]")
@@ -1598,7 +1598,7 @@ class NvidiaTTSService(TTSService):
                     break
                 if isinstance(item, Exception):
                     raise item
-                await self.stop_ttfb_metrics()
+                await self.stop_ttfb_metrics(context_id=context_id)
                 yield TTSAudioRawFrame(
                     audio=item.audio,
                     sample_rate=self.sample_rate,

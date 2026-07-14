@@ -356,8 +356,8 @@ class LmntTTSService(InterruptibleTTSService):
         async for message in self._get_websocket():
             if isinstance(message, bytes):
                 # Raw audio data
-                await self.stop_ttfb_metrics()
                 context_id = self.get_active_audio_context_id()
+                await self.stop_ttfb_metrics(context_id=context_id)
                 frame = TTSAudioRawFrame(
                     audio=message,
                     sample_rate=self.sample_rate,

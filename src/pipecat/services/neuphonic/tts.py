@@ -344,10 +344,9 @@ class NeuphonicTTSService(InterruptibleTTSService):
             if isinstance(message, str):
                 msg = json.loads(message)
                 if msg.get("data") and msg["data"].get("audio"):
-                    await self.stop_ttfb_metrics()
-
                     audio = base64.b64decode(msg["data"]["audio"])
                     context_id = self.get_active_audio_context_id()
+                    await self.stop_ttfb_metrics(context_id=context_id)
                     frame = TTSAudioRawFrame(
                         audio,
                         self.sample_rate,
@@ -668,7 +667,7 @@ class NeuphonicHttpTTSService(TTSService):
                             audio_b64 = parsed_message["data"]["audio"]
                             audio_bytes = base64.b64decode(audio_b64)
 
-                            await self.stop_ttfb_metrics()
+                            await self.stop_ttfb_metrics(context_id=context_id)
                             yield TTSAudioRawFrame(
                                 audio_bytes, self.sample_rate, 1, context_id=context_id
                             )
