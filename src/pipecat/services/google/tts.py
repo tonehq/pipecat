@@ -903,7 +903,7 @@ class GoogleHttpTTSService(TTSService):
                 chunk = audio_content[i : i + CHUNK_SIZE]
                 if not chunk:
                     break
-                await self.stop_ttfb_metrics()
+                await self.stop_ttfb_metrics(context_id=context_id)
                 frame = TTSAudioRawFrame(chunk, self.sample_rate, 1, context_id=context_id)
                 yield frame
 
@@ -1028,7 +1028,7 @@ class GoogleBaseTTSService(TTSService):
                 continue
 
             if not first_chunk_for_ttfb:
-                await self.stop_ttfb_metrics()
+                await self.stop_ttfb_metrics(context_id=context_id)
                 first_chunk_for_ttfb = True
 
             audio_buffer += chunk

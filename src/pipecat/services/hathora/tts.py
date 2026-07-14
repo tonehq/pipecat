@@ -153,7 +153,7 @@ class HathoraTTSService(TTSService):
         """
         try:
             await self.start_processing_metrics()
-            await self.start_ttfb_metrics()
+            await self.start_ttfb_metrics(context_id=context_id)
 
             url = f"{self._base_url}"
 
@@ -190,7 +190,7 @@ class HathoraTTSService(TTSService):
                 fallback_sample_rate=self.sample_rate,
             )
 
-            await self.stop_ttfb_metrics()
+            await self.stop_ttfb_metrics(context_id=context_id)
 
             yield TTSAudioRawFrame(
                 audio=pcm_audio,

@@ -371,7 +371,7 @@ class FishAudioTTSService(InterruptibleTTSService):
                                     context_id=context_id,
                                 )
                                 await self.append_to_audio_context(context_id, frame)
-                                await self.stop_ttfb_metrics()
+                                await self.stop_ttfb_metrics(context_id=context_id)
                         elif event == "finish":
                             reason = msg.get("reason", "unknown")
                             if reason == "error":

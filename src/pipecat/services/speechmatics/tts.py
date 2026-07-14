@@ -257,7 +257,7 @@ class SpeechmaticsTTSService(TTSService):
                         if not chunk:
                             continue
                         if first_chunk:
-                            await self.stop_ttfb_metrics()
+                            await self.stop_ttfb_metrics(context_id=context_id)
                             first_chunk = False
 
                         buffer += chunk

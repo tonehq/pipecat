@@ -492,7 +492,7 @@ class MiniMaxHttpTTSService(TTSService):
                                     # Convert this chunk of data
                                     audio_chunk = bytes.fromhex(hex_chunk)
                                     if audio_chunk:
-                                        await self.stop_ttfb_metrics()
+                                        await self.stop_ttfb_metrics(context_id=context_id)
                                         yield TTSAudioRawFrame(
                                             audio=audio_chunk,
                                             sample_rate=self.sample_rate,

@@ -149,7 +149,7 @@ class MistralTTSService(TTSService):
                         audio_data = await self._resampler.resample(
                             audio_int16, self.MISTRAL_SAMPLE_RATE, self.sample_rate
                         )
-                        await self.stop_ttfb_metrics()
+                        await self.stop_ttfb_metrics(context_id=context_id)
                         yield TTSAudioRawFrame(
                             audio_data, self.sample_rate, 1, context_id=context_id
                         )

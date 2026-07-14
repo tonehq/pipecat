@@ -505,7 +505,7 @@ class DeepgramHttpTTSService(TTSService):
         }
 
         try:
-            await self.start_ttfb_metrics()
+            await self.start_ttfb_metrics(context_id=context_id)
 
             async with self._session.post(
                 url, headers=headers, json=payload, params=params
@@ -521,7 +521,7 @@ class DeepgramHttpTTSService(TTSService):
                 first_chunk = True
                 async for chunk in response.content.iter_chunked(CHUNK_SIZE):
                     if first_chunk:
-                        await self.stop_ttfb_metrics()
+                        await self.stop_ttfb_metrics(context_id=context_id)
                         first_chunk = False
 
                     if chunk:

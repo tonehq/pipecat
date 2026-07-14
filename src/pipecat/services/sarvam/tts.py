@@ -302,7 +302,7 @@ class SarvamHttpTTSService(TTSService):
         logger.debug(f"{self}: Generating TTS [{text}]")
 
         try:
-            await self.start_ttfb_metrics()
+            await self.start_ttfb_metrics(context_id=context_id)
 
             payload = {
                 **self._request_payload,
@@ -345,7 +345,7 @@ class SarvamHttpTTSService(TTSService):
                 logger.debug("Stripping WAV header from Sarvam audio data")
                 audio_data = audio_data[44:]
 
-            await self.stop_ttfb_metrics()
+            await self.stop_ttfb_metrics(context_id=context_id)
 
             yield TTSAudioRawFrame(
                 audio=audio_data,
@@ -706,9 +706,9 @@ class SarvamTTSService(InterruptibleTTSService):
             if isinstance(message, str):
                 msg = json.loads(message)
                 if msg.get("type") == "audio":
-                    await self.stop_ttfb_metrics()
                     audio = base64.b64decode(msg["data"]["audio"])
                     ctx_id = self.get_active_audio_context_id()
+                    await self.stop_ttfb_metrics(context_id=ctx_id)
                     frame = TTSAudioRawFrame(audio, self.sample_rate, 1, context_id=ctx_id)
                     await self.append_to_audio_context(ctx_id, frame)
                 elif msg.get("type") == "error":
@@ -770,7 +770,7 @@ class SarvamTTSService(InterruptibleTTSService):
                 await self._connect()
 
             try:
-                await self.start_ttfb_metrics()
+                await self.start_ttfb_metrics(context_id=context_id)
                 await self._send_text(text)
                 await self.start_tts_usage_metrics(text)
             except Exception as e:

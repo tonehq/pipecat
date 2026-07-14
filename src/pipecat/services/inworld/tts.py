@@ -461,7 +461,7 @@ class InworldHttpTTSService(TTSService):
                     chunk_data = json.loads(line_str)
 
                     if "result" in chunk_data and "audioContent" in chunk_data["result"]:
-                        await self.stop_ttfb_metrics()
+                        await self.stop_ttfb_metrics(context_id=context_id)
                         async for frame in self._process_audio_chunk(
                             base64.b64decode(chunk_data["result"]["audioContent"]), context_id
                         ):
@@ -523,7 +523,7 @@ class InworldHttpTTSService(TTSService):
         for i in range(0, len(audio_data), chunk_size):
             chunk = audio_data[i : i + chunk_size]
             if chunk:
-                await self.stop_ttfb_metrics()
+                await self.stop_ttfb_metrics(context_id=context_id)
                 yield TTSAudioRawFrame(
                     audio=chunk, sample_rate=self.sample_rate, num_channels=1, context_id=context_id
                 )
@@ -1284,7 +1284,7 @@ class InworldTTSService(WebsocketTTSService):
                 if not self.audio_context_available(context_id):
                     self._reset_generation_timing()
                     await self.create_audio_context(context_id)
-                    await self.start_ttfb_metrics()
+                    await self.start_ttfb_metrics(context_id=context_id)
                     yield TTSStartedFrame(context_id=context_id)
                     await self._send_context(context_id)
 

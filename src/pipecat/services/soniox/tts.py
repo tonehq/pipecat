@@ -505,7 +505,7 @@ class SonioxTTSService(WebsocketTTSService):
 
             audio_b64 = msg.get("audio")
             if audio_b64 and stream_id and self.audio_context_available(stream_id):
-                await self.stop_ttfb_metrics()
+                await self.stop_ttfb_metrics(context_id=stream_id)
                 audio = base64.b64decode(audio_b64)
                 frame = TTSAudioRawFrame(audio, self.sample_rate, 1, context_id=stream_id)
                 await self.append_to_audio_context(stream_id, frame)

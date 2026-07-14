@@ -250,7 +250,7 @@ class XTTSService(TTSService):
             buffer = bytearray()
             async for chunk in r.content.iter_chunked(CHUNK_SIZE):
                 if len(chunk) > 0:
-                    await self.stop_ttfb_metrics()
+                    await self.stop_ttfb_metrics(context_id=context_id)
                     # Append new chunk to the buffer.
                     buffer.extend(chunk)
 

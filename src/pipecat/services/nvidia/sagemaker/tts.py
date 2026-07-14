@@ -202,7 +202,7 @@ class NvidiaSageMakerHTTPTTSService(TTSService):
             async for chunk in response["Body"].iter_chunks(chunk_size=self.chunk_size):
                 if chunk:
                     if first_chunk:
-                        await self.stop_ttfb_metrics()
+                        await self.stop_ttfb_metrics(context_id=context_id)
                         first_chunk = False
                     yield TTSAudioRawFrame(
                         audio=chunk,
@@ -458,7 +458,7 @@ class NvidiaSageMakerTTSService(InterruptibleTTSService):
             if event_type == "conversation.item.speech.data":
                 chunk_b64 = msg.get("audio", "")
                 if chunk_b64:
-                    await self.stop_ttfb_metrics()
+                    await self.stop_ttfb_metrics(context_id=context_id)
                     await self._handle_audio_chunk(base64.b64decode(chunk_b64), context_id)
             elif event_type == "error":
                 await self.push_error(error_msg=f"NIM error: {msg.get('message', msg)}")

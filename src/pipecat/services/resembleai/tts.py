@@ -480,7 +480,7 @@ class ResembleAITTSService(WebsocketTTSService):
 
             if not self.audio_context_available(context_id):
                 await self.create_audio_context(context_id)
-                await self.start_ttfb_metrics()
+                await self.start_ttfb_metrics(context_id=context_id)
                 yield TTSStartedFrame(context_id=context_id)
 
             # Map request_id to context_id for tracking

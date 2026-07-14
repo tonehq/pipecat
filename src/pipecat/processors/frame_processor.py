@@ -421,27 +421,40 @@ class FrameProcessor(BaseObject):
         """
         self._metrics.set_core_metrics_data(data)
 
-    async def start_ttfb_metrics(self, *, start_time: float | None = None):
+    async def start_ttfb_metrics(
+        self, *, start_time: float | None = None, context_id: str | None = None
+    ):
         """Start time-to-first-byte metrics collection.
 
         Args:
             start_time: Optional timestamp to use as the start time. If None,
                 uses the current time.
+            context_id: Optional per-context key. TTS should pass its
+                per-chunk context id so overlapping chunks don't corrupt
+                each other's start time. LLM/STT leave this ``None``.
         """
         if self.can_generate_metrics() and self.metrics_enabled:
             await self._metrics.start_ttfb_metrics(
-                start_time=start_time, report_only_initial_ttfb=self._report_only_initial_ttfb
+                start_time=start_time,
+                report_only_initial_ttfb=self._report_only_initial_ttfb,
+                context_id=context_id,
             )
 
-    async def stop_ttfb_metrics(self, *, end_time: float | None = None):
+    async def stop_ttfb_metrics(
+        self, *, end_time: float | None = None, context_id: str | None = None
+    ):
         """Stop time-to-first-byte metrics collection and push results.
 
         Args:
             end_time: Optional timestamp to use as the end time. If None, uses
                 the current time.
+            context_id: Optional per-context key matching the one passed to
+                :meth:`start_ttfb_metrics`.
         """
         if self.can_generate_metrics() and self.metrics_enabled:
-            frame = await self._metrics.stop_ttfb_metrics(end_time=end_time)
+            frame = await self._metrics.stop_ttfb_metrics(
+                end_time=end_time, context_id=context_id
+            )
             if frame:
                 await self.push_frame(frame)
 
@@ -459,9 +472,21 @@ class FrameProcessor(BaseObject):
                 audio=frame.audio,
                 sample_rate=frame.sample_rate,
                 num_channels=frame.num_channels,
+                context_id=frame.context_id,
             )
             if metrics_frame:
                 await self.push_frame(metrics_frame)
+
+    def discard_ttfb_context_metrics(self, context_id: str | None = None):
+        """Drop any in-flight TTFB/TTFA state for a given context.
+
+        Used when a TTS context ends (completion or interruption) before a
+        measurement was recorded, so an orphaned start time doesn't linger.
+
+        Args:
+            context_id: Context key to discard, or ``None`` for the shared key.
+        """
+        self._metrics.discard_context_metrics(context_id)
 
     async def start_processing_metrics(self, *, start_time: float | None = None):
         """Start processing metrics collection.

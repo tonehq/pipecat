@@ -396,8 +396,8 @@ class PlayHTTTSService(InterruptibleTTSService):
                 # Skip the WAV header message
                 if message.startswith(b"RIFF"):
                     continue
-                await self.stop_ttfb_metrics()
                 ctx_id = self.get_active_audio_context_id()
+                await self.stop_ttfb_metrics(context_id=ctx_id)
                 frame = TTSAudioRawFrame(message, self.sample_rate, 1, context_id=ctx_id)
                 await self.append_to_audio_context(ctx_id, frame)
             else:
@@ -440,7 +440,7 @@ class PlayHTTTSService(InterruptibleTTSService):
                 await self._connect()
 
             if not self._request_id:
-                await self.start_ttfb_metrics()
+                await self.start_ttfb_metrics(context_id=context_id)
                 self._request_id = str(uuid.uuid4())
 
             tts_command = {
@@ -633,7 +633,7 @@ class PlayHTHttpTTSService(TTSService):
         logger.debug(f"{self}: Generating TTS [{text}]")
 
         try:
-            await self.start_ttfb_metrics()
+            await self.start_ttfb_metrics(context_id=context_id)
 
             payload = {
                 "text": text,
@@ -691,7 +691,7 @@ class PlayHTHttpTTSService(TTSService):
                                     (data, size) = struct.unpack("<4sI", fh.read(8))
                                 audio_data = buffer[fh.tell() :]
                                 if len(audio_data) > 0:
-                                    await self.stop_ttfb_metrics()
+                                    await self.stop_ttfb_metrics(context_id=context_id)
                                     yield TTSAudioRawFrame(
                                         audio_data,
                                         self.sample_rate,
@@ -700,7 +700,7 @@ class PlayHTHttpTTSService(TTSService):
                                     )
                                 in_header = False
                         elif len(chunk) > 0:
-                            await self.stop_ttfb_metrics()
+                            await self.stop_ttfb_metrics(context_id=context_id)
                             yield TTSAudioRawFrame(
                                 chunk,
                                 self.sample_rate,

@@ -71,16 +71,26 @@ class SentryMetrics(FrameProcessorMetrics):
             sentry_sdk.flush(timeout=5.0)
 
     async def start_ttfb_metrics(
-        self, *, start_time: float | None = None, report_only_initial_ttfb: bool
+        self,
+        *,
+        start_time: float | None = None,
+        report_only_initial_ttfb: bool,
+        context_id: str | None = None,
     ):
         """Start tracking time-to-first-byte metrics.
 
         Args:
             start_time: Optional start timestamp override.
             report_only_initial_ttfb: Whether to report only the initial TTFB measurement.
+            context_id: Forwarded to the base class for per-context TTFB
+                tracking. The Sentry transaction itself remains a single
+                scalar, so under overlapping TTS contexts it reflects the
+                most recently started (or last stopped) context.
         """
         await super().start_ttfb_metrics(
-            start_time=start_time, report_only_initial_ttfb=report_only_initial_ttfb
+            start_time=start_time,
+            report_only_initial_ttfb=report_only_initial_ttfb,
+            context_id=context_id,
         )
 
         if self._should_report_ttfb and self._sentry_available:
@@ -92,18 +102,22 @@ class SentryMetrics(FrameProcessorMetrics):
                 f"{self} Sentry transaction started (ID: {self._ttfb_metrics_tx.span_id} Name: {self._ttfb_metrics_tx.name})"
             )
 
-    async def stop_ttfb_metrics(self, *, end_time: float | None = None):
+    async def stop_ttfb_metrics(
+        self, *, end_time: float | None = None, context_id: str | None = None
+    ):
         """Stop tracking time-to-first-byte metrics.
 
         Args:
             end_time: Optional end timestamp override.
+            context_id: Forwarded to the base class to match the paired
+                :meth:`start_ttfb_metrics` call.
 
         Returns:
             MetricsFrame produced by the base class, or None if not measuring.
             Returning the frame is required so ``FrameProcessor.stop_ttfb_metrics``
             can push it downstream to observers.
         """
-        frame = await super().stop_ttfb_metrics(end_time=end_time)
+        frame = await super().stop_ttfb_metrics(end_time=end_time, context_id=context_id)
 
         if self._sentry_available and self._ttfb_metrics_tx:
             await self._sentry_queue.put(self._ttfb_metrics_tx)

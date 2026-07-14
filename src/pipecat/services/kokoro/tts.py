@@ -232,7 +232,7 @@ class KokoroTTSService(TTSService):
             stream = self._kokoro.create_stream(text, voice=voice, lang=lang, speed=1.0)
 
             async for samples, sample_rate in stream:
-                await self.stop_ttfb_metrics()
+                await self.stop_ttfb_metrics(context_id=context_id)
 
                 audio_int16 = (samples * 32767).astype(np.int16).tobytes()
                 audio_data = await self._resampler.resample(

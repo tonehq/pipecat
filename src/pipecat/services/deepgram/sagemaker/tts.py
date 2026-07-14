@@ -282,8 +282,8 @@ class DeepgramSageMakerTTSService(TTSService):
 
                         except (UnicodeDecodeError, json.JSONDecodeError):
                             # Not JSON — treat as raw audio bytes
-                            await self.stop_ttfb_metrics()
                             context_id = self.get_active_audio_context_id()
+                            await self.stop_ttfb_metrics(context_id=context_id)
                             frame = TTSAudioRawFrame(
                                 payload,
                                 self.sample_rate,

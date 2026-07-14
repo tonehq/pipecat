@@ -431,8 +431,8 @@ class SmallestTTSService(InterruptibleTTSService):
                 # "complete" without an explicit stop.
                 pass
             elif status == "chunk":
-                await self.stop_ttfb_metrics()
                 context_id = self.get_active_audio_context_id()
+                await self.stop_ttfb_metrics(context_id=context_id)
                 frame = TTSAudioRawFrame(
                     audio=base64.b64decode(msg["data"]["audio"]),
                     sample_rate=self.sample_rate,
