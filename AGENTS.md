@@ -27,6 +27,12 @@ uv run pytest tests/test_name.py::test_function_name
 # Preview changelog
 uv run towncrier build --draft --version Unreleased
 
+# Run a behavioral eval scenario against a running bot (bot started with `-t eval`)
+pipecat eval run scenarios/<name>.yaml --bot-url ws://localhost:7860
+
+# Run the full release-eval suite (spawns bots from a manifest, runs scenarios in parallel)
+pipecat eval suite scripts/release-evals/manifest.yaml -p <bot-pattern> -s <scenario>
+
 # Lint and format check
 uv run ruff check
 uv run ruff format --check
@@ -67,7 +73,7 @@ All data flows as **Frame** objects through a pipeline of **FrameProcessors**:
 
 - **Serializers** (`src/pipecat/serializers/`): Convert frames to/from wire formats for WebSocket transports. `FrameSerializer` base class defines `serialize()` and `deserialize()`. Telephony serializers (Twilio, Plivo, Vonage, Telnyx, Exotel, Genesys) handle provider-specific protocols and audio encoding (e.g., μ-law).
 
-- **RTVI** (`src/pipecat/processors/frameworks/rtvi.py`): Real-Time Voice Interface protocol bridging clients and the pipeline. `RTVIProcessor` handles incoming client messages (text input, audio, function call results). `RTVIObserver` converts pipeline frames to outgoing messages: user/bot speaking events, transcriptions, LLM/TTS lifecycle, function calls, metrics, and audio levels.
+- **RTVI** (`src/pipecat/processors/frameworks/rtvi.py`): Real-Time Voice Interface protocol bridging clients and the pipeline. `RTVIProcessor` handles incoming client messages (text input, audio, DTMF keypresses, function call results). `RTVIObserver` converts pipeline frames to outgoing messages: user/bot speaking events, transcriptions, LLM/TTS lifecycle, function calls, metrics, and audio levels.
 
 - **Observers** (`src/pipecat/observers/`): Monitor frame flow without modifying the pipeline. Passed to `PipelineWorker` via the `observers` parameter. Implement `on_process_frame()` and `on_push_frame()` callbacks.
 
@@ -189,6 +195,7 @@ This applies to everything that documents the code — comments, docstrings, com
 
 - **Leave the current moment out of it.** Detail that feels important while making a change — alternatives considered and not taken, what the code used to do, shorthand that only made sense while the work was in progress — usually isn't worth a future reader's time, and may not even make sense to them. Include it only when they genuinely need it to understand the code as it stands.
 - **Match the weight of the prose to the code.** Keep it general, high-level, and concise. Reserve long comments for architecturally salient pieces, genuinely tricky sections, or decisions non-obvious enough that a reader would otherwise be puzzled. Routine code needs a short note or none at all.
+- **Litmus test for commits, changelogs, and comments:** every sentence must answer "what does the code do now?" — not "what happened while we worked on it." Write comments as if the code had always existed in its current form: a comment earns its place only by stating a constraint or non-obvious decision the code can't show. If a sentence describes a superseded implementation, a rejected alternative, verification performed, or argues the change is correct, delete it. Rationale is allowed only as a trailing note when its absence would puzzle a future reader.
 
 ## Service Implementation
 
@@ -204,4 +211,13 @@ When adding a new service:
 
 ## Testing
 
-Test utilities live in `src/pipecat/tests/utils.py`. Use `run_test()` to send frames through a pipeline and assert expected output frames in each direction. Use `SleepFrame(sleep=N)` to add delays between frames.
+**Unit tests.** Test utilities live in `src/pipecat/tests/utils.py`. Use `run_test()` to send frames through a pipeline and assert expected output frames in each direction. Use `SleepFrame(sleep=N)` to add delays between frames.
+
+**Behavioral evals.** `pipecat.evals` (`src/pipecat/evals/`) is a behavioral eval framework that drives a *real bot* end-to-end and asserts on its behavior — use it to confirm a feature works (interruptions, function calls, vision, multi-turn, transcription, DTMF) rather than only checking frame plumbing. The harness connects to a bot's **eval transport** as an RTVI client, plays scripted user turns (synthesizing audio in audio mode), and checks each expectation (latency, `text_contains`, an expected `function_call`, or an LLM judge of the bot's reply).
+
+A scenario is a YAML file of `turns` with `expect:` assertions; scenarios are reusable across bots. To confirm a behavior while developing:
+
+1. Run the bot with its eval transport: `python bot.py -t eval --port 7860`
+2. Run a scenario against it: `pipecat eval run scenarios/<name>.yaml --bot-url ws://localhost:7860 -v`
+
+For many bots at once, `pipecat eval suite <manifest.yaml>` spawns each bot and runs its scenarios in parallel. Reusable scenarios and the pre-release validation manifest live in `scripts/release-evals/` — see its `README.md` for the full workflow (prerequisites: a local Ollama judge `gemma2:9b`, plus Kokoro/Moonshine for audio mode) and the `pipecat.evals.scenario` module docstring for the complete scenario file format.

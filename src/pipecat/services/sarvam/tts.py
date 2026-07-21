@@ -17,8 +17,6 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from pipecat.frames.frames import (
-    CancelFrame,
-    EndFrame,
     ErrorFrame,
     Frame,
     LLMFullResponseEndFrame,
@@ -299,8 +297,6 @@ class SarvamHttpTTSService(TTSService):
         Yields:
             Frame: Audio frames containing the synthesized speech.
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
-
         try:
             await self.start_ttfb_metrics(context_id=context_id)
 
@@ -578,11 +574,14 @@ class SarvamTTSService(InterruptibleTTSService):
         await super().cancel(frame)
         await self._disconnect()
 
-    async def flush_audio(self):
-        """Flush any pending audio synthesis by sending stop command."""
-        if self._websocket:
-            msg = {"type": "flush"}
-            await self._websocket.send(json.dumps(msg))
+    async def flush_audio(self, context_id: str | None = None):
+        """Flush any pending audio synthesis by sending flush command."""
+        try:
+            if self._websocket:
+                msg = {"type": "flush"}
+                await self._websocket.send(json.dumps(msg))
+        except Exception as e:
+            await self.push_error(error_msg=f"Error sending flush to Sarvam: {e}", exception=e)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process a frame and flush audio if it's the end of a full response."""
@@ -648,12 +647,14 @@ class SarvamTTSService(InterruptibleTTSService):
             if self._websocket and self._websocket.state is State.OPEN:
                 return
 
+            ws_additional_headers = {
+                "api-subscription-key": self._api_key,
+            }
+
             self._websocket = await websocket_connect(
                 self._websocket_url,
-                additional_headers={
-                    "api-subscription-key": self._api_key,
-                    **sdk_headers(),
-                },
+                additional_headers=ws_additional_headers,
+                user_agent_header=sdk_headers()["User-Agent"],
             )
             logger.debug("Connected to Sarvam TTS Websocket")
             await self._send_config()
@@ -708,6 +709,8 @@ class SarvamTTSService(InterruptibleTTSService):
                 if msg.get("type") == "audio":
                     audio = base64.b64decode(msg["data"]["audio"])
                     ctx_id = self.get_active_audio_context_id()
+                    request_id = msg.get("data", {}).get("request_id", "N/A")
+                    logger.trace(f"TTS request_id={request_id}, context_id={ctx_id}")
                     await self.stop_ttfb_metrics(context_id=ctx_id)
                     frame = TTSAudioRawFrame(audio, self.sample_rate, 1, context_id=ctx_id)
                     await self.append_to_audio_context(ctx_id, frame)
@@ -763,8 +766,6 @@ class SarvamTTSService(InterruptibleTTSService):
         Yields:
             Frame: ``None`` while audio is streamed asynchronously, or an ErrorFrame on failure.
         """
-        logger.debug(f"Generating TTS: [{text}]")
-
         try:
             if not self._websocket or self._websocket.state is State.CLOSED:
                 await self._connect()

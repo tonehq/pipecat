@@ -38,6 +38,7 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMMessagesAppendFrame,
+    LLMServiceMetadataFrame,
     LLMSetToolsFrame,
     LLMTextFrame,
     SpeechControlParamsFrame,
@@ -54,7 +55,7 @@ from pipecat.metrics.metrics import LLMTokenUsage
 from pipecat.processors.aggregators import async_tool_messages
 from pipecat.processors.aggregators.llm_context import LLMContext, LLMSpecificMessage
 from pipecat.processors.frame_processor import FrameDirection
-from pipecat.services.llm_service import FunctionCallFromLLM, LLMService, RealtimeServiceInfo
+from pipecat.services.llm_service import FunctionCallFromLLM, LLMService
 from pipecat.services.openai._constants import OPENAI_REALTIME_WHISPER_MODEL, OPENAI_SAMPLE_RATE
 from pipecat.services.settings import (
     NOT_GIVEN,
@@ -64,6 +65,7 @@ from pipecat.services.settings import (
     is_given,
 )
 from pipecat.transcriptions.language import Language
+from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 from pipecat.utils.time import time_now_iso8601
 from pipecat.utils.tracing.service_decorators import traced_openai_realtime, traced_stt
 
@@ -214,9 +216,9 @@ class OpenAIRealtimeLLMService(LLMService[OpenAIRealtimeLLMAdapter]):
     OpenAI's server-side VAD events, so pipeline processors that depend on
     those frames (RTVI client speech events, ``TurnTrackingObserver``,
     ``AudioBufferProcessor`` turn recording, ``UserIdleController``, user
-    mute strategies, voicemail detector) work out of the box. Pair with
-    ``LLMContextAggregatorPair(..., realtime_service_mode=True)``
-    so context writes are decoupled from those frames; see the
+    mute strategies, voicemail detector) work out of the box.
+    ``LLMContextAggregatorPair`` auto-detects this realtime service and
+    decouples context writes from those frames; see the
     ``examples/realtime/realtime-openai.py`` example.
 
     If you wire local VAD (``LLMUserAggregatorParams.vad_analyzer``) on
@@ -231,10 +233,6 @@ class OpenAIRealtimeLLMService(LLMService[OpenAIRealtimeLLMAdapter]):
 
     # Overriding the default adapter to use the OpenAIRealtimeLLMAdapter one.
     adapter_class = OpenAIRealtimeLLMAdapter
-
-    # Realtime (speech-to-speech) service. Emits UserStarted/Stopped
-    # speaking frames from server-side VAD events.
-    _realtime_service_info = RealtimeServiceInfo(emits_user_turn_frames=True)
 
     def __init__(
         self,
@@ -525,6 +523,11 @@ class OpenAIRealtimeLLMService(LLMService[OpenAIRealtimeLLMAdapter]):
         await super().cancel(frame)
         await self._disconnect()
 
+    async def cleanup(self):
+        """Release realtime LLM resources at teardown."""
+        await super().cleanup()
+        await self._disconnect()
+
     #
     # speech and interruption handling
     #
@@ -544,10 +547,17 @@ class OpenAIRealtimeLLMService(LLMService[OpenAIRealtimeLLMAdapter]):
             and session_properties.audio.input.turn_detection is False
         )
 
-    def _emits_user_turn_frames(self) -> bool:
-        # When turn_detection is disabled the server doesn't emit VAD
-        # events, so we don't broadcast UserStarted/StoppedSpeakingFrame.
-        return not self._is_turn_detection_disabled()
+    def service_metadata_frame(self) -> LLMServiceMetadataFrame:
+        """Realtime service; recommends external turn strategies when server-side VAD is active."""
+        # When turn_detection is disabled the server doesn't emit VAD events,
+        # so there are no UserStarted/StoppedSpeakingFrame to drive external strategies.
+        emits_turn_frames = not self._is_turn_detection_disabled()
+        self._warn_if_realtime_service_emits_no_turn_frames(emits_turn_frames)
+        return LLMServiceMetadataFrame(
+            service_name=self.name,
+            is_realtime_service=True,
+            user_turn_strategies=ExternalUserTurnStrategies() if emits_turn_frames else None,
+        )
 
     async def _handle_interruption(self):
         if self._is_turn_detection_disabled():
@@ -998,16 +1008,25 @@ class OpenAIRealtimeLLMService(LLMService[OpenAIRealtimeLLMAdapter]):
         # usage metrics
         usage = evt.response.usage
         if usage and usage.total_tokens:
-            cached_tokens = (
-                usage.input_token_details.cached_tokens
+            input_details = (
+                usage.input_token_details
                 if hasattr(usage, "input_token_details") and usage.input_token_details
                 else None
             )
+            output_details = (
+                usage.output_token_details
+                if hasattr(usage, "output_token_details") and usage.output_token_details
+                else None
+            )
+            cached_details = input_details.cached_tokens_details if input_details else None
             tokens = LLMTokenUsage(
                 prompt_tokens=usage.input_tokens,
                 completion_tokens=usage.output_tokens,
                 total_tokens=usage.total_tokens,
-                cache_read_input_tokens=cached_tokens,
+                cache_read_input_tokens=input_details.cached_tokens if input_details else None,
+                input_audio_tokens=input_details.audio_tokens if input_details else None,
+                output_audio_tokens=output_details.audio_tokens if output_details else None,
+                cache_read_input_audio_tokens=cached_details.audio_tokens if cached_details else None,
             )
             await self.start_llm_usage_metrics(tokens)
         # Fallback stop for turns that produce no audio delta (text-only,
@@ -1377,6 +1396,6 @@ class OpenAIRealtimeLLMService(LLMService[OpenAIRealtimeLLMAdapter]):
         item = events.ConversationItem(
             type="function_call_output",
             call_id=tool_call_id,
-            output=json.dumps(result, ensure_ascii=False),
+            output=result,
         )
         await self.send_client_event(events.ConversationItemCreateEvent(item=item))

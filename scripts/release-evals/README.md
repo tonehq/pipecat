@@ -112,9 +112,10 @@ pipecat eval run scenarios/capital_question.yaml --bot-url ws://localhost:7860
 
 ## Scenarios
 
-A scenario is a sequence of `turns`. A turn either sends a `user` utterance and
-asserts on the events that come back, or it's observation-only (no `user`) and
-just asserts — used for bot-first turns like an opening greeting. The full file
+A scenario is a sequence of `turns`. A turn sends a `user` utterance, presses
+DTMF keys with `dtmf:` (mutually exclusive with `user:`), or is
+observation-only (neither field) and just asserts — used for bot-first turns
+like an opening greeting. The full file
 format (events, expectations, `send_after:`, `image:`, ...) is documented in the
 [`pipecat.evals.scenario`](../../src/pipecat/evals/scenario.py) module docstring.
 
@@ -159,6 +160,31 @@ a cat.
 For function-calling-video bots, a turn can instead register an `image:` that the
 eval transport serves when the bot requests a user image mid-conversation (see
 `describe_image`).
+
+## Flows
+
+The `flows/` bots have their own scenario set asserting on Flows behavior:
+which functions fire, with which args, and what the bot says back. Each
+scenario targets a distinguishing feature of its example — dynamic routing,
+direct and global functions, `FlowsFunctionSchema` constraints, context
+strategies, conditional branching, multi-worker handoff, `LLMSwitcher`.
+
+The scenarios run text-only (no `user:`/`judge:` blocks). To drive a bot's
+real audio pipeline instead, add the shared includes
+(`user: !include user_audio.yaml`, `judge: !include judge_audio.yaml`).
+
+Authoring conventions:
+
+- Each turn asserts the `function_call` plus a `response` eval. The `response`
+  event also paces the run: the harness waits for the bot to finish before
+  sending the next turn.
+- Terminal turns assert only the function call — `end_conversation` tears the
+  pipeline down before the farewell reaches the harness.
+
+The bots pick their LLM from `$LLM_PROVIDER` (default `openai_responses`;
+`hello_world` always uses Google): `LLM_PROVIDER=anthropic ./run.sh -p flows`
+(also `google`, `aws`). `llm_switching` needs OpenAI, Google, and Anthropic
+keys all set. `warm_transfer.py` (Daily + a live human agent) isn't covered.
 
 ## Adding coverage
 

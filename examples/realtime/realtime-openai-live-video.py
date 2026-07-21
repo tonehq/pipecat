@@ -110,7 +110,6 @@ Remember, your responses should be short. Just one or two sentences, usually. Re
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        realtime_service_mode=True,
     )
 
     pipeline = Pipeline(

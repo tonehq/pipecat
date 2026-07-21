@@ -157,6 +157,11 @@ class NvidiaSageMakerHTTPTTSService(TTSService):
         await super().cancel(frame)
         await self._close_client()
 
+    async def cleanup(self):
+        """Release the SageMaker client at teardown."""
+        await super().cleanup()
+        await self._close_client()
+
     # ── Synthesis ─────────────────────────────────────────────────────────────
 
     @traced_tts
@@ -170,8 +175,6 @@ class NvidiaSageMakerHTTPTTSService(TTSService):
         Yields:
             :class:`TTSAudioRawFrame` chunks of signed 16-bit mono PCM.
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
-
         text = text.strip()
         if not text or not any(c.isalnum() for c in text):
             return
@@ -303,23 +306,9 @@ class NvidiaSageMakerTTSService(InterruptibleTTSService):
         await super().start(frame)
         await self._connect()
 
-    async def stop(self, frame: EndFrame):
-        """Stop the TTS service and disconnect from the SageMaker endpoint.
-
-        Args:
-            frame: The end frame.
-        """
-        await super().stop(frame)
-        await self._disconnect()
-
-    async def cancel(self, frame: CancelFrame):
-        """Cancel the TTS service and disconnect from the SageMaker endpoint.
-
-        Args:
-            frame: The cancel frame.
-        """
-        await super().cancel(frame)
-        await self._disconnect()
+    # Teardown is handled by the base WebsocketTTSService, whose stop/cancel/
+    # cleanup all route through self._disconnect() (which cancels the receive
+    # task and closes the bidi-stream session).
 
     # ── Connection management (WebsocketService abstract interface) ────────────
 
@@ -494,8 +483,6 @@ class NvidiaSageMakerTTSService(InterruptibleTTSService):
     @traced_tts
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
         """Send text to NIM; audio arrives asynchronously via _receive_messages."""
-        logger.debug(f"{self}: Generating TTS [{text}]")
-
         text = text.strip()
         if not text or not any(c.isalnum() for c in text):
             return

@@ -68,6 +68,23 @@ class TestTranslate(unittest.TestCase):
         self.assertEqual(len(s._tts_audio), 0)
         self.assertTrue(s._queue.empty())
 
+    def test_discard_preserves_user_transcription(self):
+        # A DTMF keypress emits its user_transcription right before the turn-start
+        # interruption. The discard must keep it (it's the turn's input) while
+        # still dropping the bot's interrupted output.
+        s = _session(bot_audio=True)
+        s._queue.put_nowait({"type": "llm_response", "text": "greeting"})
+        s._queue.put_nowait({"type": "user_transcription", "transcript": "DTMF: 1#"})
+        self.assertEqual(
+            s._translate({"type": "user-started-speaking"}),
+            [{"type": "user_started_speaking"}],
+        )
+        # The bot output is gone; the user transcription survives, still queued.
+        self.assertEqual(
+            s._queue.get_nowait(), {"type": "user_transcription", "transcript": "DTMF: 1#"}
+        )
+        self.assertTrue(s._queue.empty())
+
     def test_user_transcription_final_only(self):
         s = _session()
         interim = {"type": "user-transcription", "data": {"text": "he", "final": False}}
@@ -183,6 +200,42 @@ class _FakeJudge:
         self.calls.append(criterion)
         v = self._verdicts.pop(0)
         return JudgeVerdict(verdict=v, reason=f"({v})", raw_response="")
+
+
+class TestMatchAbsent(unittest.IsolatedAsyncioTestCase):
+    """An ``absent: true`` expectation passes on a quiet window, fails on arrival."""
+
+    async def test_absent_passes_when_no_event_arrives(self):
+        import time
+
+        s = _session()
+        expectation = EvalExpectation(event="llm_response", absent=True)
+        failure = await s._match_and_verify(expectation, time.monotonic(), 100, 0, 0)
+        self.assertIsNone(failure)
+        self.assertIn("no 'llm_response'", s._last_match_text)
+
+    async def test_absent_fails_when_event_arrives(self):
+        import time
+
+        s = _session()
+        s._queue.put_nowait({"type": "llm_response", "text": "I repeat myself"})
+        expectation = EvalExpectation(event="llm_response", absent=True)
+        failure = await s._match_and_verify(expectation, time.monotonic(), 100, 3, 2)
+        self.assertIsNotNone(failure)
+        self.assertEqual(failure.turn_index, 3)
+        self.assertEqual(failure.expectation_index, 2)
+        self.assertIn("I repeat myself", failure.reason)
+
+    async def test_absent_ignores_other_event_types(self):
+        import time
+
+        s = _session()
+        # Unrelated events in the window must not trip the absence check.
+        s._queue.put_nowait({"type": "user_stopped_speaking"})
+        s._queue.put_nowait({"type": "tts_response", "text": "spoken"})
+        expectation = EvalExpectation(event="llm_response", absent=True)
+        failure = await s._match_and_verify(expectation, time.monotonic(), 100, 0, 0)
+        self.assertIsNone(failure)
 
 
 class TestEvaluateAggregate(unittest.IsolatedAsyncioTestCase):
@@ -396,6 +449,38 @@ class TestAudioSender(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sent), 2)  # 2s -> two ~1s slices
         self.assertEqual(b"".join(chunk for chunk, _ in sent), b"\x01\x02" * 16000 * 2)
         self.assertTrue(all(rate == 16000 for _, rate in sent))
+
+
+class TestDTMFSender(unittest.IsolatedAsyncioTestCase):
+    """A dtmf turn sends one RTVI ``dtmf`` message with all keys."""
+
+    async def test_send_user_dtmf_single_message_with_all_keys(self):
+        s = _session()
+        sent: list[RTVI.Message] = []
+
+        async def fake_send(message):
+            sent.append(message)
+
+        s._send = fake_send
+        await s._send_user_dtmf("12#")
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].type, "dtmf")
+        self.assertEqual(sent[0].data["buttons"], ["1", "2", "#"])
+
+    async def test_send_user_dtmf_single_key(self):
+        s = _session()
+        sent: list[RTVI.Message] = []
+
+        async def fake_send(message):
+            sent.append(message)
+
+        s._send = fake_send
+        await s._send_user_dtmf("1")
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].type, "dtmf")
+        self.assertEqual(sent[0].data["buttons"], ["1"])
 
 
 def _free_port() -> int:

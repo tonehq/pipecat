@@ -209,6 +209,8 @@ class TTSService(AIService):
             pause_frame_processing: Whether to pause frame processing during audio generation.
             append_trailing_space: Whether to append a trailing space to text before sending to TTS.
                 This helps prevent some TTS services from vocalizing trailing punctuation (e.g., "dot").
+                Only applied in sentence aggregation mode; when streaming tokens, the incoming
+                text's own whitespace is preserved.
             sample_rate: Output sample rate for generated audio.
             skip_aggregator_types: List of aggregation types that should not be spoken.
             text_transforms: A list of callables to transform text before just before sending it
@@ -483,6 +485,8 @@ class TTSService(AIService):
         """Run text-to-speech synthesis on the provided text.
 
         This method must be implemented by subclasses to provide actual TTS functionality.
+        The base class logs the synthesized text before invoking this method, so
+        implementations should not log it again.
 
         Args:
             text: The text to synthesize into speech.
@@ -516,7 +520,10 @@ class TTSService(AIService):
         Returns:
             The prepared text with transformations applied.
         """
-        if self._append_trailing_space and not text.endswith(" "):
+        # A trailing space only makes sense on sentence-sized inputs. When
+        # streaming tokens, the incoming text's own whitespace is authoritative:
+        # appending a space to every token would split words across tokens.
+        if self._append_trailing_space and not self._is_streaming_tokens and not text.endswith(" "):
             return text + " "
         return text
 
@@ -560,6 +567,12 @@ class TTSService(AIService):
             frame: The cancel frame.
         """
         await super().cancel(frame)
+        # Prompt stop of audio production. cleanup() repeats this idempotently.
+        await self._stop_audio_context_task()
+
+    async def cleanup(self):
+        """Release TTS resources at teardown."""
+        await super().cleanup()
         await self._stop_audio_context_task()
 
     def add_text_transformer(
@@ -1115,6 +1128,13 @@ class TTSService(AIService):
             append_to_context=self._tts_contexts[context_id].append_to_context,
         )
 
+        # When streaming tokens, per-call logs are kept at trace level; the
+        # accumulated turn text is logged at debug level at flush time.
+        if self._is_streaming_tokens:
+            logger.trace(f"{self}: Generating TTS [{prepared_text}]")
+        else:
+            logger.debug(f"{self}: Generating TTS [{prepared_text}]")
+
         await self.tts_process_generator(context_id, self.run_tts(prepared_text, context_id))
 
         if not self._is_streaming_tokens:
@@ -1634,6 +1654,34 @@ class WebsocketTTSService(TTSService, WebsocketService):
         """
         TTSService.__init__(self, **kwargs)
         WebsocketService.__init__(self, reconnect_on_error=reconnect_on_error, **kwargs)
+
+    async def stop(self, frame: EndFrame):
+        """Stop the websocket TTS service on a graceful end.
+
+        Args:
+            frame: The end frame.
+        """
+        await super().stop(frame)
+        await self._disconnect()
+
+    async def cancel(self, frame: CancelFrame):
+        """Cancel the websocket TTS service immediately.
+
+        Disconnecting here is the prompt teardown: the websocket receive loop
+        runs independently of the audio-context task, so it keeps reading from
+        the provider until the socket is closed. Stopping only the audio-context
+        task (in :meth:`TTSService.cancel`) halts output but not reception.
+
+        Args:
+            frame: The cancel frame.
+        """
+        await super().cancel(frame)
+        await self._disconnect()
+
+    async def cleanup(self):
+        """Release websocket TTS resources at teardown."""
+        await super().cleanup()
+        await self._disconnect()
 
     async def _report_error(self, error: ErrorFrame):
         await self._call_event_handler("on_connection_error", error.error)

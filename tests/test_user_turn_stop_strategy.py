@@ -14,10 +14,15 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
+    UserTurnInferenceCompletedFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
-from pipecat.turns.user_stop import ExternalUserTurnStopStrategy, SpeechTimeoutUserTurnStopStrategy
+from pipecat.turns.user_stop import (
+    ExternalUserTurnCompletionStopStrategy,
+    ExternalUserTurnStopStrategy,
+    SpeechTimeoutUserTurnStopStrategy,
+)
 from pipecat.utils.asyncio.task_manager import TaskManager, TaskManagerParams
 
 AGGREGATION_TIMEOUT = 0.1
@@ -311,8 +316,8 @@ class TestSpeechTimeoutUserTurnStopStrategy(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(should_start)
         should_start = None
 
-        # Reset for next turn (in real usage, UserTurnController would do this)
-        await strategy.reset()
+        # Arm for the next turn (the controller notifies stop strategies at turn start)
+        await strategy.handle_user_turn_started()
 
         # S - new turn starts
         await strategy.process_frame(VADUserStartedSpeakingFrame())
@@ -630,13 +635,54 @@ class TestSpeechTimeoutUserTurnStopStrategy(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(AGGREGATION_TIMEOUT + 0.1)
         self.assertTrue(should_start)
 
-    async def test_reset_clears_stale_text_no_premature_stop(self):
-        """Test that reset() clears stale text and cancels timeout, preventing premature stop.
+    async def test_reset_mid_utterance_falsely_stops_turn(self):
+        """Test that a mid-utterance reset does not falsely stop the turn.
 
-        Reproduces the bug from issue #4053: after turn 1 completes and
-        reset() is called, a late transcription sets _text. If reset() is
-        called again at turn 2 start, the stale _text should be cleared
-        so no premature stop occurs on VAD stop.
+        ``UserTurnController`` resets all stop strategies when a turn starts
+        (see ``_trigger_user_turn_start``), which can happen right after a
+        ``VADUserStartedSpeakingFrame`` with no matching stop yet — the user
+        is still speaking. ``reset()`` must preserve that live VAD state so a
+        finalized transcript for a mid-utterance segment (as streaming STT
+        services emit) is not treated as the no-VAD fallback and stopped by
+        ``user_speech_timeout`` while the user never stopped talking.
+        """
+        strategy = await self._create_strategy()
+
+        stop_count = 0
+
+        @strategy.event_handler("on_user_turn_stopped")
+        async def on_user_turn_stopped(strategy, params):
+            nonlocal stop_count
+            stop_count += 1
+
+        # User starts speaking; VAD reports start.
+        await strategy.process_frame(VADUserStartedSpeakingFrame())
+
+        # Turn-start reset, as UserTurnController performs when the turn
+        # begins. No VADUserStoppedSpeakingFrame has been received — the
+        # user is still speaking.
+        await strategy.reset()
+
+        # Streaming STT finalizes a mid-utterance segment while the user is
+        # still talking (no VAD stop event was ever emitted).
+        await strategy.process_frame(
+            TranscriptionFrame(
+                text="So I was thinking", user_id="cat", timestamp="", finalized=True
+            )
+        )
+
+        # The user never stopped speaking, so the turn must not stop just
+        # because user_speech_timeout elapses.
+        await asyncio.sleep(AGGREGATION_TIMEOUT + 0.1)
+        self.assertEqual(stop_count, 0)
+
+    async def test_turn_callbacks_clear_stale_text_no_premature_stop(self):
+        """Turn callbacks clear stale text and cancel timeouts, preventing premature stop.
+
+        Reproduces the bug from issue #4053: after turn 1 completes and the
+        stop callback runs, a late transcription sets _text. Arming at turn 2
+        start (handle_user_turn_started) should clear the stale _text so no
+        premature stop occurs on VAD stop.
         """
         strategy = await self._create_strategy()
 
@@ -654,14 +700,14 @@ class TestSpeechTimeoutUserTurnStopStrategy(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(AGGREGATION_TIMEOUT + 0.1)
         self.assertEqual(stop_count, 1)
 
-        # Reset after turn 1 (as controller would do at turn stop)
-        await strategy.reset()
+        # Turn 1 ends (as the controller notifies stop strategies at turn stop)
+        await strategy.handle_user_turn_stopped()
 
         # === Late transcription arrives between turns ===
         await strategy.process_frame(TranscriptionFrame(text="Hello!", user_id="cat", timestamp=""))
 
-        # Reset at turn 2 start (the fix: controller now resets stop strategies at turn start)
-        await strategy.reset()
+        # Turn 2 arms (the controller notifies stop strategies at turn start)
+        await strategy.handle_user_turn_started()
 
         # === Turn 2: S-T-E (transcription arrives during turn) ===
         await strategy.process_frame(VADUserStartedSpeakingFrame())
@@ -783,3 +829,37 @@ class TestExternalUserTurnStopStrategy(unittest.IsolatedAsyncioTestCase):
 
         await strategy.process_frame(UserStoppedSpeakingFrame())
         self.assertTrue(should_start)
+
+
+class TestExternalUserTurnCompletionStopStrategy(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.task_manager = TaskManager()
+        self.task_manager.setup(TaskManagerParams(loop=asyncio.get_running_loop()))
+
+    async def _create_strategy(self):
+        strategy = ExternalUserTurnCompletionStopStrategy()
+        await strategy.setup(self.task_manager)
+        return strategy
+
+    async def test_finalizes_on_completion(self):
+        """The strategy fires on_user_turn_stopped on UserTurnInferenceCompletedFrame.
+
+        The stale-completion-while-speaking gate lives in the controller (which
+        holds the authoritative user-speaking state), not in this strategy; see
+        test_user_turn_controller.py.
+        """
+        strategy = await self._create_strategy()
+
+        finalized = False
+
+        @strategy.event_handler("on_user_turn_stopped")
+        async def on_user_turn_stopped(strategy, params):
+            nonlocal finalized
+            finalized = True
+
+        await strategy.process_frame(UserTurnInferenceCompletedFrame())
+        self.assertTrue(finalized)
+
+
+if __name__ == "__main__":
+    unittest.main()

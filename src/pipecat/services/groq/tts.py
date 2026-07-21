@@ -220,7 +220,6 @@ class GroqTTSService(TTSService):
         Yields:
             Frame: Audio frames containing the synthesized speech data.
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
         measuring_ttfb = True
         try:
             model = assert_given(self._settings.model)

@@ -28,6 +28,7 @@ from pipecat.frames.frames import (
     Frame,
     InterimTranscriptionFrame,
     StartFrame,
+    STTMetadataFrame,
     TranscriptionFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
@@ -39,6 +40,7 @@ from pipecat.services.settings import NOT_GIVEN, STTSettings, _NotGiven
 from pipecat.services.stt_latency import ASSEMBLYAI_TTFS_P99
 from pipecat.services.stt_service import WebsocketSTTService
 from pipecat.transcriptions.language import Language
+from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 from pipecat.utils.time import time_now_iso8601
 from pipecat.utils.tracing.service_decorators import traced_stt
 
@@ -124,6 +126,13 @@ class AssemblyAISTTSettings(STTSettings):
         prompt: Optional text prompt to guide the transcription. Only
             used when model is "u3-rt-pro".
         language_detection: Enable automatic language detection.
+        language_code: Customer-declared audio language as an ISO code (e.g.
+            "en", "es", "fr"). On U3 Pro models, a tier-1 code
+            ("en"/"es"/"fr"/"de"/"it"/"pt") steers transcription toward that
+            language; other supported codes are "de", "tr", "nl", "sv", "no",
+            "da", "fi", "hi", "vi", "ar", "he", "ja", "ur", "zh". Mutually
+            exclusive with ``language_detection``. Defaults to None (not sent;
+            no steering).
         format_turns: Whether to format transcript turns.
         speaker_labels: Enable speaker diarization.
         vad_threshold: VAD confidence threshold (0.0–1.0) for classifying
@@ -178,6 +187,7 @@ class AssemblyAISTTSettings(STTSettings):
     keyterms_prompt: list[str] | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     prompt: str | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     language_detection: bool | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    language_code: str | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     format_turns: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     speaker_labels: bool | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     vad_threshold: float | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
@@ -278,7 +288,7 @@ class AssemblyAISTTService(WebsocketSTTService):
         """
         # 1. Initialize default_settings with hardcoded defaults
         default_settings = self.Settings(
-            model="u3-rt-pro",
+            model="universal-3-5-pro",
             language=Language.EN,
             formatted_finals=True,
             word_finalization_max_wait_time=None,
@@ -288,6 +298,7 @@ class AssemblyAISTTService(WebsocketSTTService):
             keyterms_prompt=None,
             prompt=None,
             language_detection=None,
+            language_code=None,
             format_turns=True,
             speaker_labels=None,
             vad_threshold=None,
@@ -418,6 +429,16 @@ class AssemblyAISTTService(WebsocketSTTService):
                 f"for model '{default_settings.model}'."
             )
 
+        # language_code (declared language / steering) and language_detection
+        # (auto-detect) are mutually exclusive: you can't both declare a language
+        # and ask the server to detect one.
+        if default_settings.language_code is not None and default_settings.language_detection:
+            logger.warning(
+                "language_code and language_detection are both set; these are "
+                "mutually exclusive (declaring a language vs. auto-detecting it). "
+                "Both will be sent to AssemblyAI as-is."
+            )
+
         # 6. Configure pipecat turn mode (mutates default_settings)
         if vad_force_turn_endpoint:
             self._configure_pipecat_turn_mode(default_settings, is_u3_pro)
@@ -509,6 +530,21 @@ class AssemblyAISTTService(WebsocketSTTService):
             True if metrics generation is supported.
         """
         return True
+
+    def service_metadata_frame(self) -> STTMetadataFrame:
+        """Request external turn strategies in AssemblyAI's turn-detection mode.
+
+        With ``vad_force_turn_endpoint=False`` AssemblyAI's model decides turn
+        endings and emits ``UserStarted/StoppedSpeakingFrame``, so the user
+        aggregator defers to those rather than running local VAD/smart-turn. In the
+        default Pipecat mode (``vad_force_turn_endpoint=True``) the STT emits no turn
+        frames, so the defaults are left in place. Applied unless the user passed
+        their own ``user_turn_strategies``.
+        """
+        frame = super().service_metadata_frame()
+        if not self._vad_force_turn_endpoint:
+            frame.user_turn_strategies = ExternalUserTurnStrategies()
+        return frame
 
     async def _update_settings(self, delta: Settings) -> dict[str, Any]:
         """Apply a settings delta and apply the changes to the live session.
@@ -640,6 +676,7 @@ class AssemblyAISTTService(WebsocketSTTService):
             "max_turn_silence": s.max_turn_silence,
             "prompt": s.prompt,
             "language_detection": s.language_detection,
+            "language_code": s.language_code,
             "format_turns": s.format_turns,
             "speaker_labels": s.speaker_labels,
             "vad_threshold": s.vad_threshold,
@@ -932,10 +969,10 @@ class AssemblyAISTTService(WebsocketSTTService):
         if self._vad_force_turn_endpoint:
             return  # Pipecat mode: handled by aggregator
 
-        await self.start_processing_metrics()
         await self.broadcast_frame(UserStartedSpeakingFrame)
         if self._should_interrupt:
             await self.broadcast_interruption()
+        await self.start_processing_metrics()
         self._user_speaking = True
 
     async def _handle_termination(self, message: TerminationMessage):

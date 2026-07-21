@@ -30,6 +30,26 @@ from pipecat.processors.aggregators.llm_context import (
 TLLMInvocationParams = TypeVar("TLLMInvocationParams", bound=Mapping[str, Any])
 
 
+class LLMContextConversionError(Exception):
+    """Raised when converting a universal ``LLMContext`` to a provider's message format fails.
+
+    Adapters that transform context messages into a provider-specific format
+    raise this from their conversion routine, wrapping the underlying error
+    (preserved as ``__cause__``). Its message identifies the failure as a
+    context-mapping problem and carries the underlying cause. The corresponding
+    LLM service catches this and surfaces it in the ``ErrorFrame`` it pushes
+    upstream.
+    """
+
+    def __init__(self, cause: Exception):
+        """Initialize the error.
+
+        Args:
+            cause: The underlying exception raised during message conversion.
+        """
+        super().__init__(f"Error mapping context messages to provider format: {cause}")
+
+
 class BaseLLMAdapter(ABC, Generic[TLLMInvocationParams]):
     """Abstract base class for LLM provider adapters.
 
@@ -143,7 +163,7 @@ class BaseLLMAdapter(ABC, Generic[TLLMInvocationParams]):
             self.id_for_llm_specific_messages, truncate_large_values=truncate_large_values
         )
 
-    def from_standard_tools(self, tools: Any) -> list[Any] | NotGiven:
+    def from_standard_tools(self, tools: Any) -> list[Any] | NotGiven | None:
         """Convert tools from standard format to provider format.
 
         Built-in tools are automatically merged into the schema before conversion so that every
@@ -154,7 +174,7 @@ class BaseLLMAdapter(ABC, Generic[TLLMInvocationParams]):
 
         Returns:
             List of tools converted to provider format, or original tools
-            if not in standard format.
+            (possibly ``None``) if not in standard format.
         """
         if self._builtin_tools:
             if isinstance(tools, ToolsSchema):

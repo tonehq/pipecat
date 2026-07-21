@@ -77,7 +77,7 @@ from pipecat.processors.frameworks.rtvi.models import (
     UIJobUpdateData,
     UISnapshotMessage,
 )
-from pipecat.utils.asyncio.task_manager import BaseTaskManager, TaskManager, TaskManagerParams
+from pipecat.utils.asyncio.task_manager import BaseTaskManager
 from pipecat.utils.deprecation import deprecated
 from pipecat.utils.startup import run_setup_hook
 from pipecat.utils.tracing.setup import is_tracing_available
@@ -180,6 +180,8 @@ class PipelineWorker(BaseWorker):
 
     - on_frame_reached_upstream: Called when upstream frames reach the source
     - on_frame_reached_downstream: Called when downstream frames reach the sink
+    - on_heartbeat_timeout: Called when a heartbeat frame is not received within the monitor timeout.
+          Fires repeatedly every ``heartbeats_monitor_secs`` for as long as the stall persists.
     - on_idle_timeout: Called when pipeline is idle beyond timeout threshold
     - on_pipeline_started: Called when pipeline starts with StartFrame
     - on_pipeline_finished: Called after the pipeline has reached any terminal state.
@@ -198,6 +200,10 @@ class PipelineWorker(BaseWorker):
 
         @worker.event_handler("on_frame_reached_upstream")
         async def on_frame_reached_upstream(worker, frame):
+            ...
+
+        @worker.event_handler("on_heartbeat_timeout")
+        async def on_heartbeat_timeout(worker):
             ...
 
         @worker.event_handler("on_idle_timeout")
@@ -285,7 +291,9 @@ class PipelineWorker(BaseWorker):
                 peers.
             cancel_timeout_secs: Timeout (in seconds) to wait for cancellation to happen
                 cleanly.
-            check_dangling_tasks: Whether to check for processors' tasks finishing properly.
+            check_dangling_tasks: Whether to warn about tasks left running when
+                the worker finishes. Only applies when the worker owns its task
+                manager; otherwise the runner reports dangling tasks.
             clock: Clock implementation for timing operations.
             conversation_id: Optional custom ID for the conversation.
             enable_rtvi: Whether to automatically add RTVI support to the pipeline.
@@ -304,14 +312,19 @@ class PipelineWorker(BaseWorker):
             params: Configuration parameters for the pipeline.
             rtvi_observer_params: The RTVI observer parameter to use if RTVI is enabled.
             rtvi_processor: The RTVI processor to add if RTVI is enabled.
-            task_manager: Optional worker manager for handling asyncio tasks.
+            task_manager: Optional task manager for handling asyncio tasks.
             tool_resources: Deprecated alias for ``app_resources``.
 
                 .. deprecated:: 1.2.0
                     Use ``app_resources`` instead. ``tool_resources`` will be
                     removed in 2.0.0.
         """
-        super().__init__(name=name, active=active)
+        super().__init__(
+            name=name,
+            active=active,
+            task_manager=task_manager,
+            check_dangling_tasks=check_dangling_tasks,
+        )
         self._bridged = bridged
         if tool_resources is not None:
             with warnings.catch_warnings():
@@ -329,7 +342,6 @@ class PipelineWorker(BaseWorker):
         self._cancel_on_idle_timeout = cancel_on_idle_timeout
         self._cancel_runner_on_idle_timeout = cancel_runner_on_idle_timeout
         self._cancel_timeout_secs = cancel_timeout_secs
-        self._check_dangling_tasks = check_dangling_tasks
         self._clock = clock or SystemClock()
         self._conversation_id = conversation_id
         self._enable_tracing = enable_tracing and is_tracing_available()
@@ -362,10 +374,6 @@ class PipelineWorker(BaseWorker):
 
         self._finished = False
         self._cancelled = False
-
-        # This worker maneger will handle all the asyncio tasks created by this
-        # PipelineWorker and its frame processors.
-        self._pipeline_task_manager = task_manager or TaskManager()
 
         # This queue is the queue used to push frames to the pipeline.
         self._push_queue = asyncio.Queue()
@@ -485,6 +493,7 @@ class PipelineWorker(BaseWorker):
         self._reached_downstream_types: set[type[Frame]] = set()
         self._register_event_handler("on_frame_reached_upstream")
         self._register_event_handler("on_frame_reached_downstream")
+        self._register_event_handler("on_heartbeat_timeout")
         self._register_event_handler("on_idle_timeout")
         self._register_event_handler("on_pipeline_started")
         self._register_event_handler("on_pipeline_finished")
@@ -700,8 +709,7 @@ class PipelineWorker(BaseWorker):
             # 2. By an asyncio worker cancellation (except case).
             logger.debug(f"Pipeline worker {self} is finishing...")
             await self._cancel_tasks()
-            if self._check_dangling_tasks:
-                self._print_dangling_tasks()
+            self._print_dangling_tasks()
             self._finished = True
             logger.debug(f"Pipeline worker {self} has finished")
 
@@ -1001,10 +1009,7 @@ class PipelineWorker(BaseWorker):
 
     async def _setup(self, params: WorkerParams):
         """Set up the pipeline worker and all processors."""
-        await super().setup(self._pipeline_task_manager)
-
-        mgr_params = TaskManagerParams(loop=params.loop)
-        self.task_manager.setup(mgr_params)
+        await super().setup(self._task_manager or params.task_manager)
 
         setup = FrameProcessorSetup(
             clock=self._clock,
@@ -1218,10 +1223,10 @@ class PipelineWorker(BaseWorker):
     async def _heartbeat_monitor_handler(self):
         """Monitor heartbeat frames for processing time and timeout detection.
 
-        This worker monitors heartbeat frames. If a heartbeat frame has not
-        been received for a long period a warning will be logged. It also logs
-        the time that a heartbeat frame takes to processes, that is how long it
-        takes for the heartbeat frame to traverse all the pipeline.
+        Logs the time each heartbeat takes to traverse the pipeline. If no
+        heartbeat arrives within ``heartbeats_monitor_secs``, logs a warning
+        and fires ``on_heartbeat_timeout``. The event fires repeatedly every
+        ``heartbeats_monitor_secs`` for as long as the stall persists.
         """
         wait_time = self._params.heartbeats_monitor_secs
         while True:
@@ -1234,6 +1239,7 @@ class PipelineWorker(BaseWorker):
                 logger.warning(
                     f"{self}: heartbeat frame not received for more than {wait_time} seconds"
                 )
+                await self._call_event_handler("on_heartbeat_timeout")
 
     async def _idle_monitor_handler(self):
         """Monitor pipeline activity and detect idle conditions.
@@ -1290,12 +1296,6 @@ class PipelineWorker(BaseWorker):
             function_name="setup_pipeline_worker",
             deprecated_function_name="setup_pipeline_task",
         )
-
-    def _print_dangling_tasks(self):
-        """Log any dangling tasks that haven't been properly cleaned up."""
-        tasks = [t.get_name() for t in self.task_manager.current_tasks()]
-        if tasks:
-            logger.warning(f"{self} dangling tasks detected: {tasks}")
 
     def _create_start_metadata(self) -> dict[str, Any]:
         """Build and return start metadata including user-provided values."""

@@ -94,7 +94,7 @@ class NvidiaTTSSettings(TTSSettings):
     """
 
     quality: int | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    synthesis_mode: NvidiaTTSSynthesisMode = NvidiaTTSSynthesisMode.PER_SENTENCE
+    synthesis_mode: NvidiaTTSSynthesisMode | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
 
 
 @dataclass
@@ -209,6 +209,7 @@ class NvidiaTTSService(TTSService):
             voice="Magpie-Multilingual.EN-US.Aria",
             language=Language.EN_US,
             quality=20,
+            synthesis_mode=NvidiaTTSSynthesisMode.PER_SENTENCE,
         )
 
         # 2. Apply direct init arg overrides (deprecated)
@@ -1227,8 +1228,7 @@ class NvidiaTTSService(TTSService):
             frame: The end frame.
         """
         await super().stop(frame)
-        await self._abort_synthesis_stream()
-        self._close_client()
+        await self._teardown()
 
     async def cancel(self, frame: CancelFrame):
         """Cancel the NVIDIA TTS service.
@@ -1237,6 +1237,19 @@ class NvidiaTTSService(TTSService):
             frame: The cancel frame.
         """
         await super().cancel(frame)
+        await self._teardown()
+
+    async def cleanup(self):
+        """Release all resources held by the service."""
+        await super().cleanup()
+        await self._teardown()
+
+    async def _teardown(self):
+        """Abort the active synthesis stream and close the gRPC client.
+
+        Idempotent so it can run from ``stop()``, ``cancel()``, and
+        ``cleanup()`` without duplicating teardown work.
+        """
         await self._abort_synthesis_stream()
         self._close_client()
 
@@ -1519,8 +1532,6 @@ class NvidiaTTSService(TTSService):
                 self._start_synthesis_stream(context_id)
                 logger.trace(f"{self}: Started synthesis stream for context {context_id}")
 
-            logger.debug(f"{self}: Generating TTS [{text}]")
-
             state = self._stream_state
             if state is None:
                 raise RuntimeError("Synthesis stream not started")
@@ -1543,8 +1554,6 @@ class NvidiaTTSService(TTSService):
             await self.create_audio_context(context_id)
             await self.start_ttfb_metrics(context_id=context_id)
             yield TTSStartedFrame(context_id=context_id)
-
-        logger.debug(f"{self}: Generating TTS [{text}]")
 
         chunks = [
             chunk for chunk in self._split_text_into_chunks(text) if any(c.isalnum() for c in chunk)

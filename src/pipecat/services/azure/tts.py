@@ -443,8 +443,7 @@ class AzureTTSService(TTSService, AzureBaseTTSService):
             frame: End frame signaling service stop.
         """
         await super().stop(frame)
-        await self.cancel_task(self._word_processor_task)
-        self._word_processor_task = None
+        await self._stop_tasks()
 
     async def cancel(self, frame: CancelFrame):
         """Cancel the Azure TTS service.
@@ -453,8 +452,18 @@ class AzureTTSService(TTSService, AzureBaseTTSService):
             frame: Cancel frame signaling service cancellation.
         """
         await super().cancel(frame)
-        await self.cancel_task(self._word_processor_task)
-        self._word_processor_task = None
+        await self._stop_tasks()
+
+    async def cleanup(self):
+        """Clean up the Azure TTS service."""
+        await super().cleanup()
+        await self._stop_tasks()
+
+    async def _stop_tasks(self):
+        """Cancel the word processor task. Idempotent."""
+        if self._word_processor_task:
+            await self.cancel_task(self._word_processor_task)
+            self._word_processor_task = None
 
     def _is_cjk_language(self) -> bool:
         """Check if the configured language is CJK (Chinese, Japanese, Korean).
@@ -734,8 +743,6 @@ class AzureTTSService(TTSService, AzureBaseTTSService):
         Yields:
             Frame: Audio frames containing synthesized speech data.
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
-
         # Clear the audio queue in case there's still audio in it, causing the next audio response
         # to be cut off by the 'None' element returned at the end of the previous audio synthesis.
         # Empty the audio queue before processing the new text
@@ -952,8 +959,6 @@ class AzureHttpTTSService(TTSService, AzureBaseTTSService):
         Yields:
             Frame: Audio frames containing the complete synthesized speech.
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
-
         ssml = self._construct_ssml(text)
 
         result = await asyncio.to_thread(self._speech_synthesizer.speak_ssml, ssml)

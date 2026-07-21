@@ -22,6 +22,7 @@ from pipecat.metrics.metrics import (
     MetricsData,
     ProcessingMetricsData,
     SmartTurnMetricsData,
+    TTFAMetricsData,
     TTFBMetricsData,
     TTSUsageMetricsData,
 )
@@ -134,6 +135,11 @@ class MetricsLogObserver(BaseObserver):
             logger.info(
                 f"📊 {processor_info} TTFB{model_info}: {metrics_data.value}s at {time_sec:.3f}s"
             )
+        elif isinstance(metrics_data, TTFAMetricsData):
+            logger.info(
+                f"📊 {processor_info} TTFA{model_info}: {metrics_data.ttfa}s "
+                f"({metrics_data.leading_silence}s leading silence) at {time_sec:.3f}s"
+            )
         elif isinstance(metrics_data, ProcessingMetricsData):
             logger.info(
                 f"📊 {processor_info} PROCESSING TIME{model_info}: {metrics_data.value}s at {time_sec:.3f}s"
@@ -184,6 +190,15 @@ class MetricsLogObserver(BaseObserver):
 
         if usage.reasoning_tokens is not None:
             details.append(f"reasoning: {usage.reasoning_tokens}")
+
+        if usage.input_audio_tokens is not None:
+            details.append(f"input_audio: {usage.input_audio_tokens}")
+
+        if usage.output_audio_tokens is not None:
+            details.append(f"output_audio: {usage.output_audio_tokens}")
+
+        if usage.cache_read_input_audio_tokens is not None:
+            details.append(f"cache_read_audio: {usage.cache_read_input_audio_tokens}")
 
         usage_str = ", ".join(details)
 

@@ -753,6 +753,11 @@ class GoogleSTTService(STTService):
         await super().cancel(frame)
         await self._disconnect()
 
+    async def cleanup(self):
+        """Release streaming resources."""
+        await super().cleanup()
+        await self._disconnect()
+
     @deprecated(
         "`GoogleSTTService.update_options` is deprecated since 0.0.104 and will be removed in "
         "2.0.0. Use `STTUpdateSettingsFrame` instead."
@@ -994,6 +999,7 @@ class GoogleSTTService(STTService):
                                 time_now_iso8601(),
                                 primary_language,
                                 result=result,
+                                finalized=True,
                             )
                         )
                         await self.stop_processing_metrics()

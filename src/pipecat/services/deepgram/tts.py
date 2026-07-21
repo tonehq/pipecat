@@ -21,8 +21,6 @@ from websockets.asyncio.client import connect as websocket_connect
 from websockets.protocol import State
 
 from pipecat.frames.frames import (
-    CancelFrame,
-    EndFrame,
     ErrorFrame,
     Frame,
     StartFrame,
@@ -145,24 +143,6 @@ class DeepgramTTSService(WebsocketTTSService):
         """
         await super().start(frame)
         await self._connect()
-
-    async def stop(self, frame: EndFrame):
-        """Stop the Deepgram WebSocket TTS service.
-
-        Args:
-            frame: The end frame.
-        """
-        await super().stop(frame)
-        await self._disconnect()
-
-    async def cancel(self, frame: CancelFrame):
-        """Cancel the Deepgram WebSocket TTS service.
-
-        Args:
-            frame: The cancel frame.
-        """
-        await super().cancel(frame)
-        await self._disconnect()
 
     async def _connect(self):
         """Connect to Deepgram WebSocket and start receive task."""
@@ -341,8 +321,6 @@ class DeepgramTTSService(WebsocketTTSService):
         Yields:
             Frame: Audio frames containing the synthesized speech, plus start/stop frames.
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
-
         try:
             # Reconnect if the websocket is closed
             if not self._websocket or self._websocket.state is State.CLOSED:
@@ -483,8 +461,6 @@ class DeepgramHttpTTSService(TTSService):
         Yields:
             Frame: Audio frames containing the synthesized speech, plus start/stop frames.
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
-
         # Build URL with parameters
         url = f"{self._base_url}/v1/speak"
 
