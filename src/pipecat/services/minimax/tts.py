@@ -388,8 +388,6 @@ class MiniMaxHttpTTSService(TTSService):
         Yields:
             Frame: Audio frames containing the synthesized speech.
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
-
         headers = {
             "accept": "application/json, text/plain, */*",
             "Content-Type": "application/json",

@@ -105,6 +105,11 @@ class UserTurnController(BaseObject):
         self._register_event_handler("on_user_turn_stop_timeout", sync=True)
         self._register_event_handler("on_reset_aggregation", sync=True)
 
+    @property
+    def user_turn_strategies(self) -> UserTurnStrategies:
+        """The currently active user turn strategies."""
+        return self._user_turn_strategies
+
     async def setup(self, task_manager: BaseTaskManager):
         """Initialize the controller with the given task manager.
 
@@ -190,11 +195,24 @@ class UserTurnController(BaseObject):
             s.add_event_handler("on_user_turn_stopped", self._on_user_turn_stopped)
 
     async def _cleanup_strategies(self):
+        # Remove the handlers _setup_strategies added (symmetric), so re-applying
+        # strategies via update_strategies — possibly reusing the same strategy
+        # instances — doesn't accumulate duplicate handler registrations.
         for s in self._user_turn_strategies.start or []:
             await s.cleanup()
+            s.remove_event_handler("on_push_frame", self._on_push_frame)
+            s.remove_event_handler("on_broadcast_frame", self._on_broadcast_frame)
+            s.remove_event_handler("on_user_turn_started", self._on_user_turn_started)
+            s.remove_event_handler("on_reset_aggregation", self._on_reset_aggregation)
 
         for s in self._user_turn_strategies.stop or []:
             await s.cleanup()
+            s.remove_event_handler("on_push_frame", self._on_push_frame)
+            s.remove_event_handler("on_broadcast_frame", self._on_broadcast_frame)
+            s.remove_event_handler(
+                "on_user_turn_inference_triggered", self._on_user_turn_inference_triggered
+            )
+            s.remove_event_handler("on_user_turn_stopped", self._on_user_turn_stopped)
 
     async def _handle_user_started_speaking(self, frame: UserStartedSpeakingFrame):
         self._user_speaking = True
@@ -268,13 +286,14 @@ class UserTurnController(BaseObject):
         self._user_turn = True
         self._user_turn_stop_timeout_event.set()
 
-        # Reset all user turn start strategies to start fresh.
+        # Notify every strategy that the turn has started. Start strategies
+        # ready themselves for the next detection; stop strategies arm to detect
+        # this turn's end. A strategy resets whatever per-turn state it keeps
+        # inside its own handle_user_turn_started.
         for s in self._user_turn_strategies.start or []:
-            await s.reset()
-
-        # Reset all user turn stop strategies to start fresh for the new turn.
+            await s.handle_user_turn_started()
         for s in self._user_turn_strategies.stop or []:
-            await s.reset()
+            await s.handle_user_turn_started()
 
         await self._call_event_handler("on_user_turn_started", strategy, params)
 
@@ -299,12 +318,27 @@ class UserTurnController(BaseObject):
         if not self._user_turn:
             return
 
+        # Never finalize while the user is audibly speaking. A stop strategy can
+        # finalize on a latent signal (e.g. an LLM ✓ that resolves after the
+        # user resumed), which is stale by the time it arrives. Keep the turn
+        # open so the next inference re-evaluates; the watchdog still finalizes
+        # if the user then falls silent. Detector strategies only finalize once
+        # the user has stopped, so this is a no-op for them.
+        if self._user_speaking:
+            return
+
         self._user_turn = False
         self._user_turn_stop_timeout_event.set()
 
-        # Reset all user turn stop strategies to start fresh.
+        # Notify every strategy that the turn has ended. Stop strategies reset
+        # (and, e.g., drop a turn analyzer's buffered speech that must not
+        # survive an externally-ended turn). Start strategies get the same
+        # callback, but it's a no-op by default: their reset is turn-start
+        # semantic, so resetting them here would be wrong.
+        for s in self._user_turn_strategies.start or []:
+            await s.handle_user_turn_stopped()
         for s in self._user_turn_strategies.stop or []:
-            await s.reset()
+            await s.handle_user_turn_stopped()
 
         await self._call_event_handler("on_user_turn_stopped", strategy, params)
 

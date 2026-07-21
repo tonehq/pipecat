@@ -24,8 +24,6 @@ from websockets.asyncio.client import connect as websocket_connect
 from websockets.protocol import State
 
 from pipecat.frames.frames import (
-    CancelFrame,
-    EndFrame,
     ErrorFrame,
     Frame,
     StartFrame,
@@ -267,24 +265,6 @@ class AsyncAITTSService(WebsocketTTSService):
         self._output_sample_rate = self.sample_rate
         await self._connect()
 
-    async def stop(self, frame: EndFrame):
-        """Stop the Async TTS service.
-
-        Args:
-            frame: The end frame.
-        """
-        await super().stop(frame)
-        await self._disconnect()
-
-    async def cancel(self, frame: CancelFrame):
-        """Cancel the Async TTS service.
-
-        Args:
-            frame: The cancel frame.
-        """
-        await super().cancel(frame)
-        await self._disconnect()
-
     async def _connect(self):
         await super()._connect()
 
@@ -478,8 +458,6 @@ class AsyncAITTSService(WebsocketTTSService):
         Yields:
             Frame: Audio frames containing the synthesized speech.
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
-
         try:
             if not self._websocket or self._websocket.state is State.CLOSED:
                 await self._connect()
@@ -682,8 +660,6 @@ class AsyncAIHttpTTSService(TTSService):
         Yields:
             Frame: Audio frames containing the synthesized speech.
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
-
         try:
             voice_config = {"mode": "id", "id": self._settings.voice}
 

@@ -43,14 +43,22 @@ class TTFAMetricsData(MetricsData):
 
     Measures the time from a TTS request to the first audible audio sample,
     i.e. time-to-first-byte plus any leading silence the service pads onto the
-    start of its response. Comparing TTFA against TTFB reveals how much of the
-    perceived latency is silence padding rather than service response time.
+    start of its response. ``ttfa`` is reported with its breakdown so consumers
+    can see how much of the perceived latency is silence padding rather than
+    service response time, without correlating a separate ``TTFBMetricsData``.
 
     Parameters:
-        value: TTFA measurement in seconds.
+        ttfa: TTFA measurement in seconds (``ttfb`` plus ``leading_silence``).
+        ttfb: Time-to-first-byte that TTFA builds on, in seconds. This mirrors
+            the standalone ``TTFBMetricsData`` (emitted earlier) for convenience;
+            it is not a separate measurement, so don't aggregate both.
+        leading_silence: Silence padding before the first audible sample, in
+            seconds (``ttfa`` minus ``ttfb``).
     """
 
-    value: float
+    ttfa: float
+    ttfb: float
+    leading_silence: float
 
 
 class ProcessingMetricsData(MetricsData):
@@ -72,6 +80,10 @@ class LLMTokenUsage(BaseModel):
         total_tokens: Total number of tokens used (prompt + completion).
         cache_read_input_tokens: Number of tokens read from cache, if applicable.
         cache_creation_input_tokens: Number of tokens used to create cache entries, if applicable.
+        reasoning_tokens: Number of completion tokens used for reasoning, if applicable.
+        input_audio_tokens: Number of prompt tokens that were audio, if applicable.
+        output_audio_tokens: Number of completion tokens that were audio, if applicable.
+        cache_read_input_audio_tokens: Number of cache-read tokens that were audio, if applicable.
     """
 
     prompt_tokens: int
@@ -80,6 +92,9 @@ class LLMTokenUsage(BaseModel):
     cache_read_input_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     reasoning_tokens: int | None = None
+    input_audio_tokens: int | None = None
+    output_audio_tokens: int | None = None
+    cache_read_input_audio_tokens: int | None = None
 
 
 class LLMUsageMetricsData(MetricsData):

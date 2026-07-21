@@ -162,6 +162,11 @@ class DeepgramSageMakerTTSService(TTSService):
         await super().cancel(frame)
         await self._disconnect()
 
+    async def cleanup(self):
+        """Clean up the Deepgram SageMaker TTS service."""
+        await super().cleanup()
+        await self._disconnect()
+
     async def _connect(self):
         """Connect to the SageMaker endpoint and start the BiDi session.
 
@@ -337,7 +342,6 @@ class DeepgramSageMakerTTSService(TTSService):
             Frame: TTSStartedFrame, then None (audio comes asynchronously via
             the response processor).
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
         if self._client is None:
             logger.warning(f"{self}: client unavailable, skipping TTS")
             yield ErrorFrame(error="client unavailable")

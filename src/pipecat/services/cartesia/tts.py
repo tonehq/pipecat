@@ -21,8 +21,6 @@ from websockets.asyncio.client import connect as websocket_connect
 from websockets.protocol import State
 
 from pipecat.frames.frames import (
-    CancelFrame,
-    EndFrame,
     ErrorFrame,
     Frame,
     StartFrame,
@@ -560,24 +558,6 @@ class CartesiaTTSService(WebsocketTTSService):
         self._output_sample_rate = self.sample_rate
         await self._connect()
 
-    async def stop(self, frame: EndFrame):
-        """Stop the Cartesia TTS service.
-
-        Args:
-            frame: The end frame.
-        """
-        await super().stop(frame)
-        await self._disconnect()
-
-    async def cancel(self, frame: CancelFrame):
-        """Stop the Cartesia TTS service.
-
-        Args:
-            frame: The end frame.
-        """
-        await super().cancel(frame)
-        await self._disconnect()
-
     async def _connect(self):
         await super()._connect()
 
@@ -755,11 +735,6 @@ class CartesiaTTSService(WebsocketTTSService):
         Yields:
             Frame: Audio frames containing the synthesized speech.
         """
-        if not self._is_streaming_tokens:
-            logger.debug(f"{self}: Generating TTS [{text}]")
-        else:
-            logger.trace(f"{self}: Generating TTS [{text}]")
-
         try:
             if not self._websocket or self._websocket.state is State.CLOSED:
                 await self._connect()
@@ -942,22 +917,9 @@ class CartesiaHttpTTSService(TTSService):
             await self._session.close()
             self._session = None
 
-    async def stop(self, frame: EndFrame):
-        """Stop the Cartesia HTTP TTS service.
-
-        Args:
-            frame: The end frame.
-        """
-        await super().stop(frame)
-        await self._close_session()
-
-    async def cancel(self, frame: CancelFrame):
-        """Cancel the Cartesia HTTP TTS service.
-
-        Args:
-            frame: The cancel frame.
-        """
-        await super().cancel(frame)
+    async def cleanup(self):
+        """Close the owned HTTP session at teardown."""
+        await super().cleanup()
         await self._close_session()
 
     @traced_tts
@@ -971,8 +933,6 @@ class CartesiaHttpTTSService(TTSService):
         Yields:
             Frame: Audio frames containing the synthesized speech.
         """
-        logger.debug(f"{self}: Generating TTS [{text}]")
-
         try:
             if self._session is None:
                 raise RuntimeError("HTTP session is not initialized; call start() before run_tts()")
