@@ -21,6 +21,7 @@ import websockets
 from loguru import logger
 from pydantic.main import BaseModel
 from websockets.asyncio.client import connect as websocket_connect
+from websockets.protocol import State
 
 from pipecat.frames.frames import (
     CancelFrame,
@@ -188,7 +189,7 @@ class WebsocketClientSession:
         Returns:
             True if the WebSocket is in connected state.
         """
-        return self._websocket.state == websockets.State.OPEN if self._websocket else False
+        return self._websocket.state == State.OPEN if self._websocket else False
 
     @property
     def is_closing(self) -> bool:
@@ -197,7 +198,7 @@ class WebsocketClientSession:
         Returns:
             True if the WebSocket is in the process of closing.
         """
-        return self._websocket.state == websockets.State.CLOSING if self._websocket else False
+        return self._websocket.state == State.CLOSING if self._websocket else False
 
     async def _client_task_handler(self):
         """Handle incoming messages from the WebSocket connection."""

@@ -65,7 +65,7 @@ class TwilioFrameSerializer(FrameSerializer):
     credentials to be provided.
     """
 
-    class InputParams(BaseModel):
+    class InputParams(FrameSerializer.InputParams):
         """Configuration parameters for TwilioFrameSerializer.
 
         Parameters:
