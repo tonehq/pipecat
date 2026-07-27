@@ -37,7 +37,7 @@ class ExotelFrameSerializer(FrameSerializer):
         https://support.exotel.com/support/solutions/articles/3000108630-working-with-the-stream-and-voicebot-applet
     """
 
-    class InputParams(BaseModel):
+    class InputParams(FrameSerializer.InputParams):
         """Configuration parameters for ExotelFrameSerializer.
 
         Parameters:

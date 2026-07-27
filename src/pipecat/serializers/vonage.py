@@ -35,7 +35,7 @@ class VonageFrameSerializer(FrameSerializer):
         Ref docs: https://developer.vonage.com/en/video/guides/audio-connector
     """
 
-    class InputParams(BaseModel):
+    class InputParams(FrameSerializer.InputParams):
         """Configuration parameters for VonageFrameSerializer.
 
         Parameters:
