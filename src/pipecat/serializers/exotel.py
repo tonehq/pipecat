@@ -130,8 +130,12 @@ class ExotelFrameSerializer(FrameSerializer):
             A Pipecat frame corresponding to the Exotel event, or None if unhandled.
         """
         message = json.loads(data)
+        # Control frames (e.g. the final frame at hang-up) can arrive without a
+        # top-level "event" key; use .get() so a missing key returns None (unhandled)
+        # instead of raising KeyError and killing the transport receive loop.
+        event = message.get("event")
 
-        if message["event"] == "media":
+        if event == "media":
             payload_base64 = message["media"]["payload"]
             payload = base64.b64decode(payload_base64)
 
@@ -151,7 +155,7 @@ class ExotelFrameSerializer(FrameSerializer):
                 sample_rate=self._sample_rate,  # Use the configured pipeline input rate
             )
             return audio_frame
-        elif message["event"] == "dtmf":
+        elif event == "dtmf":
             digit = message.get("dtmf", {}).get("digit")
 
             try:
