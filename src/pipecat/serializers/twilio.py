@@ -8,7 +8,7 @@
 
 import base64
 import json
-from typing import Optional
+from typing import Optional, cast
 
 from loguru import logger
 from pydantic import BaseModel
@@ -282,8 +282,12 @@ class TwilioFrameSerializer(FrameSerializer):
             A Pipecat frame corresponding to the Twilio event, or None if unhandled.
         """
         message = json.loads(data)
+        # Twilio control frames (e.g. the final frame at hang-up) can arrive without a
+        # top-level "event" key; use .get() so a missing key returns None (unhandled)
+        # instead of raising KeyError and killing the transport receive loop.
+        event = message.get("event")
 
-        if message["event"] == "media":
+        if event == "media":
             payload_base64 = message["media"]["payload"]
             payload = base64.b64decode(payload_base64)
 
@@ -299,7 +303,7 @@ class TwilioFrameSerializer(FrameSerializer):
                 audio=deserialized_data, num_channels=1, sample_rate=self._sample_rate
             )
             return audio_frame
-        elif message["event"] == "dtmf":
+        elif event == "dtmf":
             digit = message.get("dtmf", {}).get("digit")
 
             try:
